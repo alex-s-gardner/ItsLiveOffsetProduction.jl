@@ -5,4 +5,6 @@ using Test
     # without a network. The granule-to-product pipeline is `tools/golden/julia_e2e.jl`, which needs
     # AWS credentials and is run by hand.
     include("itslive.jl")
+    include("geogrid.jl")
+    include("georef.jl")
 end
