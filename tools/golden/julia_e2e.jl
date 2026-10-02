@@ -332,6 +332,10 @@ item is anonymous, unlike the imagery it points at.
 way in; `ItsLiveOffsetProduction.ImagePairInfo`'s docstring records that the product's date attributes inherit that.
 """
 function scene_identification(name::AbstractString)
+    # A Sentinel-2 product name carries its own acquisition time to the second, so it needs no item at
+    # all. The Landsat STAC call exists for the one field a Landsat id does not carry — the time of day
+    # — so asking the Landsat collection for an `S2...` name is a 404, not a slower answer.
+    startswith(name, "S2") && return sentinel2_identification(name)
     url = "https://landsatlook.usgs.gov/stac-server/collections/landsat-c2l1/items/$name"
     body = String(take!(Downloads.download(url, IOBuffer(); timeout = 60)))
     return open_optical(JSON3.read(body, Dict{String,Any}))
@@ -347,21 +351,31 @@ are doubles: it carries them through NumPy rather than as Python ints.
 """
 function native_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
     early, late = acquisition_order(c)
-    id1, id2 = scene_identification(early), scene_identification(late)
+    # Concurrently: these are two independent round trips to the same host, and run one after the
+    # other they cost 0.47 s against 0.22 s together. A Sentinel-2 name needs no request at all, so
+    # for an S2 pair both tasks are pure parsing and the spawn costs nothing. At `-t 1` this still
+    # runs, just sequentially.
+    t_early = Threads.@spawn scene_identification(early)
+    t_late = Threads.@spawn scene_identification(late)
+    id1, id2 = fetch(t_early), fetch(t_late)
     lon, lat = pair_centroid(s.pair.coordinate, s.epsg)
     extra = Dict{String,Any}(
         "id_img1" => id1.id, "id_img2" => id2.id,
         "sensor_img1" => id1.sensor, "sensor_img2" => id2.sensor,
         "correction_level_img1" => id1.correction_level,
-        "correction_level_img2" => id2.correction_level,
-        "path_img1" => Float64(id1.path), "path_img2" => Float64(id2.path),
-        "row_img1" => Float64(id1.row), "row_img2" => Float64(id2.row),
-        "collection_number_img1" => Float64(id1.collection_number),
-        "collection_number_img2" => Float64(id2.collection_number),
-        "collection_category_img1" => id1.collection_category,
-        "collection_category_img2" => id2.collection_category,
-        "processing_date_img1" => id1.processing_date,
-        "processing_date_img2" => id2.processing_date)
+        "correction_level_img2" => id2.correction_level)
+    # Path, row, collection and processing date are Landsat's own. A Sentinel-2 product's
+    # `img_pair_info` carries none of them — checked against the golden S2 products, whose variable has
+    # exactly the six attributes above plus the ones `write_product` derives — and
+    # `sentinel2_identification` leaves them `nothing`, so they are added only where they exist.
+    for (n, id) in ((1, id1), (2, id2))
+        id.path === nothing && continue
+        extra["path_img$n"] = Float64(id.path)
+        extra["row_img$n"] = Float64(id.row)
+        extra["collection_number_img$n"] = Float64(id.collection_number)
+        extra["collection_category_img$n"] = id.collection_category
+        extra["processing_date_img$n"] = id.processing_date
+    end
     return ItsLiveOffsetProduction.ImagePairInfo(id1.acquisition_time, id2.acquisition_time,
                                   id1.mission, id2.mission, id1.satellite, id2.satellite,
                                   Float64(roi_valid), round(lat; digits = 2), round(lon; digits = 2),
