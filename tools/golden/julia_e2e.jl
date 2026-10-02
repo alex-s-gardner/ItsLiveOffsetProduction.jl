@@ -351,7 +351,13 @@ are doubles: it carries them through NumPy rather than as Python ints.
 """
 function native_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
     early, late = acquisition_order(c)
-    id1, id2 = scene_identification(early), scene_identification(late)
+    # Concurrently: these are two independent round trips to the same host, and run one after the
+    # other they cost 0.47 s against 0.22 s together. A Sentinel-2 name needs no request at all, so
+    # for an S2 pair both tasks are pure parsing and the spawn costs nothing. At `-t 1` this still
+    # runs, just sequentially.
+    t_early = Threads.@spawn scene_identification(early)
+    t_late = Threads.@spawn scene_identification(late)
+    id1, id2 = fetch(t_early), fetch(t_late)
     lon, lat = pair_centroid(s.pair.coordinate, s.epsg)
     extra = Dict{String,Any}(
         "id_img1" => id1.id, "id_img2" => id2.id,
