@@ -25,8 +25,9 @@ jobs:
       fail-fast: false
       matrix:
         # Named channels rather than version numbers, so there is nothing to bump when a new
-        # Julia lands.
-        version: ['lts', '1', 'pre']
+        # Julia lands. No `lts`: this package's required dependencies are unregistered and reachable
+        # only through `[sources]`, which Pkg gained in 1.11, so 1.10 cannot install it at all.
+        version: ['1', 'pre']
         os: [ubuntu-latest, macOS-latest, windows-latest]
         exclude:
           # One OS is enough to catch a breaking change on an unreleased Julia; three would

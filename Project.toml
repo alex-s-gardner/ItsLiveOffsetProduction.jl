@@ -27,7 +27,10 @@ ImagePairGeometry = "0.1"
 NCDatasets = "0.13, 0.14"
 Rasters = "0.14, 0.15"
 Statistics = "1"
-julia = "1.10"
+# 1.11, not the LTS: `AutoRIFT` and `ImagePairGeometry` are required dependencies and neither is
+# registered, so they can only be resolved through `[sources]` -- which Pkg gained in 1.11 and
+# ignores before it, leaving 1.10 to demand them from a registry that does not carry them.
+julia = "1.11"
 
 # None of these are registered, so the resolver needs an explicit source for each. `FastGeoProjections`
 # is declared even though no code here uses it: `ImagePairGeometry` requires a version newer than the
