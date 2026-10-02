@@ -8,7 +8,8 @@
 import Pkg
 Pkg.activate(@__DIR__)
 
-using AutoRIFT, ItsLiveOffsetProduction, NCDatasets, Dates, JSON3, Proj
+using AutoRIFT, ItsLiveOffsetProduction, NCDatasets, Dates, JSON3
+import FastGeoProjections as FGP
 
 include(joinpath(@__DIR__, "manifest.jl"))
 include(joinpath(@__DIR__, "reference.jl"))
@@ -103,7 +104,8 @@ function run_case(fragment::AbstractString; n::Integer = 101, threads::Integer =
     x = collect(x0 .+ (0:(nx - 1)) .* xres)
     y = collect(y0 .+ (0:(ny - 1)) .* yres)
 
-    to_lonlat = Proj.Transformation("EPSG:$(Int(s["epsg"]))", "EPSG:4326"; always_xy = true)
+    to_lonlat = FGP.Transformation(FGP.EPSG(Int(s["epsg"])), FGP.EPSG(4326);
+                                   always_xy = true)
     lonlat(px, py) = (to_lonlat(px, py)...,)
 
     georef = ItsLiveOffsetProduction.ItsLiveGeoref(x, y, mapping_attrs, lonlat,

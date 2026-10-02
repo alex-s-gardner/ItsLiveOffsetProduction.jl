@@ -45,7 +45,11 @@ using ItsLiveOffsetProduction
 import Downloads
 import GeoFormatTypes as GFT
 import JSON3
-import Proj
+# `FastGeoProjections` rather than PROJ for the lon/lat transform: the harness already builds
+# `grid_transform` with it, and the two agree to 1e-14 degrees on every CRS these cases use.
+# PROJ is not loaded at all on this path: `grid_transform` pulls it in only for its `--proj-only`
+# cross-check.
+import FastGeoProjections as FGP
 # Loaded, not called: `cf_grid_mapping` comes from `ItsLiveOffsetProduction`, whose trigger is
 # Rasters plus DimensionalData plus ArchGDAL plus DiskArrays, and a product cannot be written without
 # the CF grid-mapping attributes it builds.
@@ -405,7 +409,8 @@ function native_georef(s::Setup)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
     y = collect(gt[4] + gt[6] / 2 .+ (0:(ny - 1)) .* gt[6])
-    to_lonlat = Proj.Transformation("EPSG:$(s.info.epsg)", "EPSG:4326"; always_xy = true)
+    to_lonlat = FGP.Transformation(FGP.EPSG(Int(s.info.epsg)), FGP.EPSG(4326);
+                                   always_xy = true)
     px = ImagePairGeometry.xsize(s.pair.coordinate)
     py = abs(s.pair.coordinate.spacing[2])
     return ItsLiveOffsetProduction.ItsLiveGeoref(x, y, ItsLiveOffsetProduction.cf_grid_mapping(GFT.EPSG(s.info.epsg)),
