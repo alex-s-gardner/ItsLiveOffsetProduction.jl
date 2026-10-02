@@ -3,7 +3,7 @@
 #
 #   julia --project=tools/golden -t 8 tools/golden/e2e.jl S2B_MSIL1C_20200612
 #   julia --project=tools/golden -t 8 tools/golden/e2e.jl S2B_MSIL1C_20200612 --all
-#   julia --project=tools/golden -t 8 tools/golden/e2e.jl S2B_MSIL1C_20200612 --all --proj-only
+#   julia --project=tools/golden -t 8 tools/golden/e2e.jl S2B_MSIL1C_20200612 --all
 #
 # **Why this exists alongside `stages.jl`.** Every other comparison in this directory is fed the
 # reference's own arrays: `capture.py` dumps the filtered, byte-quantized pair and the snapped grid
@@ -34,9 +34,6 @@ using AutoRIFT: chip_sizes, subpixel_at
 using ArchGDAL, ImagePairGeometry, Printf, Statistics
 using ImagePairGeometry: ProjectedCoordinate
 import FastGeoProjections as FGP
-# Loaded, not called: `FastGeoProjectionsProjExt` is what gives `proj_only` a pipeline to build, and an
-# extension triggers on the package being present rather than on it being used.
-import Proj
 
 # ---------------------------------------------------------------------------
 # Gates the geogrid needs and `stages.jl` does not
@@ -416,11 +413,9 @@ end
 # Measured on the burst case's 2,835,430-point window: 6.84 s on one thread, which was over half of
 # `setup`.
 #
-# The transform is passed as a *factory* rather than as a value. A threaded run wants one transform per
-# task, because a PROJ pipeline wraps a context that is not safe to share — which is what `--proj-only`
-# selects, and what `FastGeoProjections` falls back to for a CRS pair it has no native implementation for.
-# Resolving one costs milliseconds, so paying it per task is cheaper than reasoning about which pairs are
-# safe.
+# The transform is passed as a *factory* rather than as a value, so a threaded run builds one per task
+# rather than sharing one. A transform can wrap state that is not safe to share, and resolving one costs
+# milliseconds, so paying it per task is cheaper than reasoning about which pairs are safe to share.
 _geogrid(grid, pair, inputs, window, nd, tffactory) =
     pairgeometry_blocked(grid, pair, InMemoryInputs(inputs, window); transform = tffactory, window,
                          nodata = nodata_from(nd === nothing ? 0.0 : Float64(nd)))
@@ -437,12 +432,12 @@ This is the reference's own order of operations: `coregister` first, because geo
 and size are the *overlap's* rather than either scene's (`testGeogridOptical.py:92-100`), then the
 region lookup on the overlap's centre, then the grid from the region's DEM.
 """
-function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing, proj_only::Bool = false)
+function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing)
     run = n === nothing ? resolve_run(c) : run_dir(c, n)
     isdir(run) || error("no reference run at $run; run reference.jl or intermediate.jl first")
 
     (startswith(c.platform, "S1") || c.platform == "NISAR-L1") &&
-        return _radar_setup(c, run, proj_only)
+        return _radar_setup(c, run)
 
     # Reprojection first, because the footprints geogrid intersects — and the pixel grid its indices
     # count in — are the warped ones. A pair already in one projection comes back untouched.
@@ -460,7 +455,7 @@ function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing, proj_only::Bo
     epsg = footprint_epsg(rfp)
     info = parameter_info(pair_centroid(pair.coordinate, epsg)...)
     grid = parameter_grid(info)
-    tf = grid_transform(info.epsg, epsg; proj_only)
+    tf = grid_transform(info.epsg, epsg)
     window = grid_window(grid, footprint_bounds(tf, pair.coordinate))
 
     # The nodata value the reference applies to five rasters, read from DEM band 1 as it does
@@ -470,13 +465,13 @@ function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing, proj_only::Bo
     nd = ArchGDAL.getnodatavalue(ArchGDAL.getband(ArchGDAL.read(info.paths.dem), 1))
     inputs = geometry_inputs(info, window)
     g = _geogrid(grid, pair, inputs, window, nd,
-                 () -> grid_transform(info.epsg, epsg; proj_only))
+                 () -> grid_transform(info.epsg, epsg))
 
     return Setup(c, run, rpath, spath, pair, epsg, info, grid, window, tf, g, inputs)
 end
 
 """
-    _radar_setup(c, run, proj_only) -> Setup
+    _radar_setup(c, run) -> Setup
 
 `setup` for a Sentinel-1 pair, whose geometry comes from burst annotations rather than from a raster.
 
@@ -493,7 +488,7 @@ Four things differ from the projected path and each is the reference's own choic
   * There is no scene path to read a footprint from, so those fields are the radar rasters the driver
     wrote, for the rungs that want to name them.
 """
-function _radar_setup(c::GoldenCase, run::AbstractString, proj_only::Bool)
+function _radar_setup(c::GoldenCase, run::AbstractString)
     # A NISAR L1 RSLC is one acquisition on one radar grid, so its pair is read straight off the two
     # products; a Sentinel-1 pair has to be assembled from burst annotations and mosaicked, from ASF for
     # a full granule and from the synthesized SAFE for a burst job.
@@ -509,47 +504,43 @@ function _radar_setup(c::GoldenCase, run::AbstractString, proj_only::Bool)
     info = parameter_info(lon, lat)
     grid = parameter_grid(info)
 
-    tf = grid_transform(info.epsg, 4326; proj_only)
+    tf = grid_transform(info.epsg, 4326)
     window = grid_window(grid, footprint_bounds(tf, coord))
 
     nd = ArchGDAL.getnodatavalue(ArchGDAL.getband(ArchGDAL.read(info.paths.vx), 1))
     inputs = geometry_inputs(info, window)
     g = _geogrid(grid, pair, inputs, window, nd,
-                 () -> grid_transform(info.epsg, 4326; proj_only))
+                 () -> grid_transform(info.epsg, 4326))
 
     return Setup(c, run, joinpath(run, "reference.tif"), joinpath(run, "secondary.tif"),
                  pair, info.epsg, info, grid, window, tf, g, inputs)
 end
 
 """
-    grid_transform(grid_epsg, scene_epsg; proj_only = false) -> TransformPair
+    grid_transform(grid_epsg, scene_epsg) -> TransformPair
 
 The grid-to-scene transform, as one `FastGeoProjections.Transformation` and its inverse.
 
-`proj_only` forces the Proj-backed pipeline where a native implementation exists. It is the
-attribution knob, not a correctness one: the reference builds its transforms with
-`osr.CoordinateTransformation`, so forcing Proj takes the projection library out of the comparison and
-leaves whatever remains belonging to the kernel arithmetic.
-
-One interface rather than two, because `FastGeoProjections` already is one — `proj_only` is its own
-keyword and it falls back to Proj for any CRS pair it has no native implementation for, so there is no
-second library to construct against. The inverse comes from `inv` rather than from a second call on the
-swapped pair: the element type and math kernel are carried by the operator's type rather than by its
+`FastGeoProjections` has a native implementation for every pair these cases use — 3413 to and from the
+UTM zones, and the same-CRS identity — so PROJ is not a dependency of this harness at all. The inverse
+comes from `inv` rather than from a second call on the swapped pair: the element type and math kernel are carried by the operator's type rather than by its
 fields, so rebuilding from the EPSG codes would silently revert both.
 
-The choice is nearly invisible, measured rather than assumed. Over the eight same-CRS optical cases the
-two produce **identical integer bands at every point but one of 33.8 million** — a `search_x` sitting
-within 3.5e-8 of a pixel of a rounding boundary, see [`rounded_stage`](@ref). They disagree by 1.7e-7 m
-in position and 7.3e-11 relative in the one-cell step the kernel consumes, which reaches the `Float64`
-bands as at most 1.3e-5 metres per year per pixel of displacement.
+The two libraries were cross-checked against each other while PROJ was still a dependency, and the
+agreement is why it no longer is: over the eight same-CRS optical cases they produced **identical
+integer bands at every point but one of 33.8 million** — a `search_x` within 3.5e-8 of a pixel of a
+rounding boundary, see [`rounded_stage`](@ref) — disagreeing by 1.7e-7 m in position and 7.3e-11
+relative in the one-cell step the kernel consumes, at most 1.3e-5 metres per year per pixel of
+displacement. On the cross-CRS pairs the cases actually use the two agree to 4e-7 degrees, against a
+latitude the product writes rounded to two decimals.
 
 Equal codes short-circuit to the identity, which is what `fast_transform` does and what makes the one
 Antarctic case bitwise on every band: its scene is already in the parameter region's own projection.
 """
-function grid_transform(grid_epsg::Integer, scene_epsg::Integer; proj_only::Bool = false)
+function grid_transform(grid_epsg::Integer, scene_epsg::Integer)
     grid_epsg == scene_epsg && return transform_pair(IdentityTransform())
     f = FGP.Transformation(FGP.EPSG(Int(grid_epsg)), FGP.EPSG(Int(scene_epsg));
-                           always_xy = true, proj_only)
+                           always_xy = true)
     return TransformPair(f, inv(f))
 end
 
@@ -1713,7 +1704,7 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    e2e(c::GoldenCase; n = nothing, stop_on_red = true, proj_only = false) -> Vector{StageResult}
+    e2e(c::GoldenCase; n = nothing, stop_on_red = true) -> Vector{StageResult}
 
 Run the ladder on `c`, stopping at the first red rung unless told otherwise.
 
@@ -1722,8 +1713,8 @@ after a red one are being asked a question whose premise has already failed — 
 against a grid that does not match is comparing two different problems.
 """
 function e2e(c::GoldenCase; n::Union{Integer,Nothing} = nothing, stop_on_red::Bool = true,
-             proj_only::Bool = false)
-    s = setup(c; n, proj_only)
+             )
+    s = setup(c; n)
     # The interval off the pair rather than recomputed: the two paths derive it by opposite conventions —
     # whole calendar days for optical, full precision for radar — and the pair already holds the one that
     # was used.
@@ -1741,13 +1732,13 @@ function e2e(c::GoldenCase; n::Union{Integer,Nothing} = nothing, stop_on_red::Bo
 end
 
 function main(args)
-    isempty(args) && error("usage: e2e.jl <product> [--run N] [--all] [--proj-only]")
+    isempty(args) && error("usage: e2e.jl <product> [--run N] [--all]")
     c = only(cases(args[1]))
     n = nothing
     i = findfirst(==("--run"), args)
     i === nothing || (n = parse(Int, args[i + 1]))
     ok = report(e2e(c; n, stop_on_red = !("--all" in args),
-                    proj_only = "--proj-only" in args))
+                    ))
     ok || exit(1)
     return nothing
 end
