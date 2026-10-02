@@ -31,7 +31,7 @@ end
 const HANDLED_IMG_PAIR_INFO_KEYS = (
     "acquisition_date_img1", "acquisition_date_img2", "mission_img1", "mission_img2",
     "satellite_img1", "satellite_img2", "time_standard_img1", "time_standard_img2",
-    "date_center", "date_dt", "latitude", "longitude", "ItsLiveOffsetProduction.roi_valid_percentage",
+    "date_center", "date_dt", "latitude", "longitude", "roi_valid_percentage",
     "autoRIFT_software_version",
 )
 
@@ -120,7 +120,7 @@ function run_case(fragment::AbstractString; n::Integer = 101, threads::Integer =
     img_pair_info = ItsLiveOffsetProduction.ImagePairInfo(
         _parse_ref_date(info["acquisition_date_img1"]), _parse_ref_date(info["acquisition_date_img2"]),
         info["mission_img1"], info["mission_img2"], info["satellite_img1"], info["satellite_img2"],
-        Float64(info["ItsLiveOffsetProduction.roi_valid_percentage"]), Float64(info["latitude"]), Float64(info["longitude"]),
+        Float64(info["roi_valid_percentage"]), Float64(info["latitude"]), Float64(info["longitude"]),
         extra)
 
     chip_size_x = round.(UInt16, a["CHIPSIZEX"])
@@ -142,11 +142,12 @@ function run_case(fragment::AbstractString; n::Integer = 101, threads::Integer =
     mine = read_product(mine_path)
     theirs = read_product(fresh_product)
     d = compare_products(mine, theirs)
+    type_diffs = attrib_type_diffs(mine_path, fresh_product)
 
     return (; product = c.product, platform = c.platform, pair_type, physics_ok,
             schema_mine = schema(mine), schema_theirs = schema(theirs),
             cropped_mine = cropped(mine), cropped_theirs = cropped(theirs),
-            diff = d, agrees = agrees_on_data(d))
+            diff = d, agrees = agrees_on_data(d), type_diffs)
 end
 
 function main(args)
@@ -160,6 +161,15 @@ function main(args)
     show(stdout, r.diff)
     println()
     println("agrees_on_data: ", r.agrees)
+    if isempty(r.type_diffs)
+        println("attribute storage types: all shared attributes match")
+    else
+        println("attribute storage types differing (", length(r.type_diffs), "):")
+        for k in sort(collect(keys(r.type_diffs)))
+            ta, tb = r.type_diffs[k]
+            println("  ", rpad(k, 34), " nc_type ", ta, "  vs  ", tb)
+        end
+    end
     return nothing
 end
 

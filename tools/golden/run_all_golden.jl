@@ -33,6 +33,8 @@ function run_all(; skip = String[])
                 show(stdout, r.diff)
                 println()
             end
+            isempty(r.type_diffs) ||
+                println("attribute storage types differing: ", length(r.type_diffs), " (", join(sort(collect(keys(r.type_diffs))), ", "), ")")
         catch e
             elapsed = time() - t0
             push!(results, (; frag, ok = false, r = nothing, elapsed, err = e))
@@ -50,10 +52,10 @@ function run_all(; skip = String[])
         end
         r = res.r
         bad_vars = filter(v -> !agrees(v), r.diff.vars)
-        status = r.physics_ok && isempty(bad_vars) ? "OK" : "CHECK"
+        status = r.physics_ok && isempty(bad_vars) && isempty(r.type_diffs) ? "OK" : "CHECK"
         println(rpad(res.frag[1:min(60, end)], 62), "  ", status,
                 "  physics=", r.physics_ok, "  bad_vars=", [v.name for v in bad_vars],
-                "  missing=", r.diff.missing_vars)
+                "  missing=", r.diff.missing_vars, "  type_diffs=", length(r.type_diffs))
     end
     return results
 end

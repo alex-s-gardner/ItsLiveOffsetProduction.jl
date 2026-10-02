@@ -226,3 +226,47 @@ agrees_on_data(d::ProductDiff) =
     isempty(d.missing_vars) && all(agrees, d.vars) &&
     d.x_max == 0 && d.y_max == 0 &&
     all(k -> k in VOLATILE_TIME, keys(d.attrib_diffs))
+
+# ---------------------------------------------------------------------------
+# On-disk attribute storage class. `Product` reads an attribute through NCDatasets' decoding
+# `attrib` dict, which returns the same Julia `String` whether the file stored it as `NC_CHAR` or
+# `NC_STRING` — so a type-only mismatch is invisible to `compare_products` no matter how carefully
+# its result is read. This reopens both files to ask the C library directly.
+# ---------------------------------------------------------------------------
+
+"""
+    attrib_type_diffs(path_a, path_b) -> Dict{String,Tuple{Int32,Int32}}
+
+Shared attributes of the two netCDF files at `path_a`/`path_b` whose on-disk netCDF type differs —
+the reference writes every string attribute as `NC_STRING` (12); `write_product` writes `NC_CHAR` (2)
+instead, documented at `_setattr!` in `src/write.jl`.
+
+Keyed `"variable.attribute"`, or `"global.attribute"` for a dataset-level one. Values are the raw
+`nc_inq_att` type codes `(type_a, type_b)`. Only attributes present under the same name in both files
+are checked, matching `compare_products`'s own `attrib_diffs`.
+"""
+function attrib_type_diffs(path_a::AbstractString, path_b::AbstractString)
+    diffs = Dict{String,Tuple{Int32,Int32}}()
+    NCDataset(path_a) do da
+        NCDataset(path_b) do db
+            _record_atttype_diffs!(diffs, "global", da.ncid, NCDatasets.NC_GLOBAL,
+                                   db.ncid, NCDatasets.NC_GLOBAL, keys(da.attrib), keys(db.attrib))
+            for name in sort!(collect(String, intersect(keys(da), keys(db))))
+                va, vb = da[name].var, db[name].var
+                _record_atttype_diffs!(diffs, name, va.ds.ncid, va.varid, vb.ds.ncid, vb.varid,
+                                       keys(da[name].attrib), keys(db[name].attrib))
+            end
+        end
+    end
+    return diffs
+end
+
+function _record_atttype_diffs!(diffs::Dict, prefix::AbstractString, ncid_a, varid_a, ncid_b, varid_b,
+                                 names_a, names_b)
+    for k in sort!(collect(String, intersect(Set(String.(names_a)), Set(String.(names_b)))))
+        ta, _ = NCDatasets.nc_inq_att(ncid_a, varid_a, k)
+        tb, _ = NCDatasets.nc_inq_att(ncid_b, varid_b, k)
+        ta == tb || (diffs["$prefix.$k"] = (ta, tb))
+    end
+    return diffs
+end

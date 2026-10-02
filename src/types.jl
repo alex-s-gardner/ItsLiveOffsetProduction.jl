@@ -128,7 +128,11 @@ function cf_grid_mapping end
 The per-image-pair metadata the reference calls `IMG_INFO_DICT`.
 
 `mission_img1`/`mission_img2` (`"L"`, `"S"`, or `"N"`) and `satellite_img1`/`satellite_img2` feed the
-`satellite` global attribute; `acquisition_date_img1`/`acquisition_date_img2` feed the computed
+`satellite` global attribute. `satellite_img1`/`satellite_img2` are untyped because the reference's own
+`IMG_INFO_DICT` carries them as whatever type the source metadata gives — a string for Landsat/Sentinel
+(`"8"`, `"A"`) but a bare integer for NISAR — and both the type and the value are written through
+verbatim to the per-variable `img_pair_info` attribute; only the derived `satellite` global attribute
+stringifies it. `acquisition_date_img1`/`acquisition_date_img2` feed the computed
 `date_dt`/`date_center` attributes. `latitude`/`longitude` are the pre-crop centroid — [`write_product`](@ref)
 overwrites both after cropping, for every case except the uncropped (`P000`) one. `roi_valid_percentage`
 does double duty beyond being a plain attribute: `write` skips cropping entirely whenever it rounds
@@ -151,8 +155,8 @@ struct ImagePairInfo
     acquisition_date_img2::DateTime
     mission_img1::String
     mission_img2::String
-    satellite_img1::String
-    satellite_img2::String
+    satellite_img1
+    satellite_img2
     roi_valid_percentage::Float64
     latitude::Float64
     longitude::Float64

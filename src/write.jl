@@ -96,7 +96,10 @@ end
 function _std_over_mask(diff::AbstractArray, mask::AbstractArray{Bool})
     v = diff[mask]
     v = filter(!isnan, v)
-    return isempty(v) ? NaN : std(v)
+    # `netcdf_output.py`'s `np.std` is uncorrected (divides by n, not n - 1); `corrected = false`
+    # matches it. The two conventions agree to O(1/n) and the mask here is sometimes only tens to
+    # hundreds of pixels, where that order is a visible fraction of an error of a few tens of m/year.
+    return isempty(v) ? NaN : std(v; corrected = false)
 end
 
 # ---------------------------------------------------------------------------
@@ -322,8 +325,11 @@ function _error_family(comp, compref, ssm, ssm1, stable_count, stable_count1, st
     end
     error = stable_shift_applied == 1 ? error_stationary :
             stable_shift_applied == 2 ? error_slow : error_modeled
+    # The reference's `else` branch is the bare Python literal `0` (`netcdf_output.py:633` etc.), not
+    # a rounded float, so this is an `Int64` to match the `NC_INT64` it writes — `_round1` dispatches
+    # on that to leave it alone, where `mean_shift`/`mean_shift1` are always `Float64`.
     stable_shift = stable_shift_applied == 2 ? mean_shift1 :
-                   stable_shift_applied == 1 ? mean_shift : 0.0
+                   stable_shift_applied == 1 ? mean_shift : 0
     stable_shift_stationary = stable_count != 0 ? mean_shift : NaN
     stable_shift_slow = stable_count1 != 0 ? mean_shift1 : NaN
     return (; error, error_stationary, error_modeled, error_slow,
@@ -423,27 +429,42 @@ _fill_f32(data::AbstractArray{<:AbstractFloat}, nodata) = ifelse.(nodata, NODATA
 # netCDF plumbing.
 # ---------------------------------------------------------------------------
 
-# The reference writes every string attribute as `NC_STRING` (confirmed against a real product's
-# `ncdump -h`: `string x:standard_name = "..."`), where the plain `x.attrib[key] = "a string"` path
-# used here writes `NC_CHAR` instead — NCDatasets matches `NC_STRING` only when the value is wrapped
-# in a one-element `Vector{String}` (its own `defAttrib` docstring). That wrapping was tried and
-# reverted: under conditions traced to real captured data but not fully isolated, it silently
-# corrupted a short string value on write (observed: a value ending in a bare `.` came back on
-# read-back with spurious trailing `0`s appended, on a variable that had already received other
-# vector-wrapped string attributes) — reproducible in the real write path, not reproducible in any
-# hand-built isolation of it. A wrong on-disk *type tag* on an informational string attribute
-# (`NC_CHAR` vs `NC_STRING` — both hold the identical text, read identically by any reader) is a
-# schema mismatch worth documenting; silently corrupting the *value* is not an acceptable trade for
-# fixing it, so this only handles the `Int64`→`NC_INT64` case, which was verified not to have the
-# same failure mode.
+# Whether `_setattr!` forces a string attribute to `NC_STRING`, scoped around one `_write_file!`
+# call by `_with_netcdf_create` so concurrent `write_product` calls on different tasks cannot race.
+#
+# The reference writes a cropped product's string attributes as `NC_STRING` (confirmed against a
+# real product's `ncdump -h`: `string x:standard_name = "..."`) but the uncropped (`P000`) product's
+# as `NC_CHAR` — confirmed against both a real cropped and a real uncropped product. `netCDF_packaging`
+# writes both with the plain Python `netCDF4` library, which defaults to `NC_CHAR`; only the cropped
+# path's extra reopen-and-patch in `crop.py` goes through `xarray`, which is where the upgrade to
+# `NC_STRING` happens. So this package's own on-disk type has to track the same cropped/uncropped
+# split, not pick one unconditionally.
+const _FORCE_NC_STRING = ScopedValue(false)
+
+# NCDatasets matches `NC_STRING` only when the value is wrapped in a one-element `Vector{String}`
+# (its own `defAttrib` docstring) — a bare `String` writes `NC_CHAR` instead. `Int64` goes through
+# `nc_put_att` directly with `NC_INT64`, since the plain `x.attrib[key] = val` path narrows a bare
+# `Int64` to `Int32`.
 function _setattr!(x, key, val)
     if val isa Int64 && hasproperty(x, :var)
         raw = x.var
         NCDatasets.nc_put_att(raw.ds.ncid, raw.varid, key, NCDatasets.NC_INT64, Int64[val])
+    elseif val isa AbstractString && _FORCE_NC_STRING[]
+        x.attrib[key] = [val]
     else
         x.attrib[key] = val
     end
     return x
+end
+
+# Opens `path` for writing with `_FORCE_NC_STRING` scoped to `cropped`, so every `_setattr!` call
+# `f` makes sees the on-disk string type the reference itself would use for this product's schema.
+function _with_netcdf_create(f, path::AbstractString, cropped::Bool)
+    with(_FORCE_NC_STRING => cropped) do
+        NCDatasets.NCDataset(path, "c") do ds
+            f(ds)
+        end
+    end
 end
 
 # `data` is (y, x) — AutoRIFT's own convention. NCDatasets keeps a netCDF `(y,x)` variable's Julia-side
@@ -481,9 +502,8 @@ function _defvar_2d!(ds, name, ::Type{T}, fillvalue, dimnames, chunksizes) where
                               deflatelevel = 2, shuffle = true, chunksizes)
 end
 
-function _round1(x)
-    return isnan(x) ? x : round(x; digits = 1)
-end
+_round1(x::Integer) = x
+_round1(x::AbstractFloat) = isnan(x) ? x : round(x; digits = 1)
 
 # Python's `str(float)` never uses scientific notation in the range these coordinates occupy, and
 # every one of them is an exact multiple of half the 120 m pixel size, so one decimal digit is exact
@@ -546,8 +566,10 @@ function _satellite_attribute(info::ImagePairInfo)
         throw(ArgumentError("unrecognized mission code $(info.mission_img1)"))
     haskey(MISSION_NAMES, info.mission_img2) ||
         throw(ArgumentError("unrecognized mission code $(info.mission_img2)"))
-    s1 = MISSION_NAMES[info.mission_img1] * info.satellite_img1
-    s2 = MISSION_NAMES[info.mission_img2] * info.satellite_img2
+    # `string`, not `*`: `satellite_img1`/`satellite_img2` carry whatever type the source metadata
+    # gives (a bare integer for NISAR), matching Python's f-string, which stringifies either way.
+    s1 = MISSION_NAMES[info.mission_img1] * string(info.satellite_img1)
+    s2 = MISSION_NAMES[info.mission_img2] * string(info.satellite_img2)
     return s1 == s2 ? s1 : "$s1 and $s2"
 end
 
@@ -779,7 +801,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
     date_center_str = rstrip(date_center_str, '0')
     img_pair_info_dict["date_center"] = date_center_str
 
-    NCDatasets.NCDataset(path, "c") do ds
+    _with_netcdf_create(path, cropped) do ds
         _setattr!(ds, "GDAL_AREA_OR_POINT", "Area")
         _setattr!(ds, "Conventions", "CF-1.8")
         _setattr!(ds, "date_created", Dates.format(Dates.now(), "dd-u-yyyy HH:MM:SS"))

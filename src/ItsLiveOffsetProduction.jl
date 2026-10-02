@@ -14,6 +14,7 @@ mapping are all needed on every run, so there is nothing for a package extension
 """
 module ItsLiveOffsetProduction
 
+using Base.ScopedValues: ScopedValue, with
 using Dates: Dates, DateTime
 using Statistics: median, quantile, std
 
