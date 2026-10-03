@@ -1419,7 +1419,30 @@ Base.size(r::ResampledSwath) = r.dims
 # threaded. `tools/golden/selftest.jl` pins the two against each other.
 _next_mark(v::Integer, step::Integer) = (fld(v, step) + 1) * step
 
+"""
+    _support_bounds(dl, ds, lines, samples) -> (ymin, ymax, xmin, xmax)
+
+The exact range `y = l + dl(l, s) + 1` and `x = s + ds(l, s) + 1` reach over the window.
+
+Dispatches on whether `dl`/`ds` are cell-linear (see [`_cell_linear`](@ref)), which is exactly the
+condition [`resample_burst`](@ref)'s own `cellwise` branch checks: the corner argument below is a
+property of [`_offset_lattice`](@ref)'s piecewise-bilinear field, not of callables in general. A real
+COMPASS offset replayed from `burst_offsets` is a per-pixel raster — adjacent pixels carry unrelated
+values, including the -1e7 sentinel a failed `Geo2Rdr` solve leaves — and sampling it at a stride the
+same way silently blends a sentinel into neighboring cells' answers rather than merely risking a missed
+extremum, which is a wrong band rather than a slightly loose one.
+"""
 function _support_bounds(dl, ds, lines::AbstractUnitRange, samples::AbstractUnitRange)
+    _cell_linear(dl) && _cell_linear(ds) && return _support_bounds_lattice(dl, ds, lines, samples)
+    return _support_bounds_exhaustive(dl, ds, lines, samples)
+end
+
+# Exact, from the lattice's own cell corners. Inside one cell of `_offset_lattice`'s grid the offsets
+# are bilinear and the index is linear, so `y = l + dl(l, s)` is bilinear there — and a bilinear
+# function on a rectangle attains its extremes at that rectangle's corners. The extremes over a window
+# are therefore the extremes over the corners of the cells it meets, which are the window's own edges
+# together with the lattice lines inside it. Nothing between those points can exceed them.
+function _support_bounds_lattice(dl, ds, lines::AbstractUnitRange, samples::AbstractUnitRange)
     ymin = xmin = Inf
     ymax = xmax = -Inf
     s = first(samples)
@@ -1435,6 +1458,20 @@ function _support_bounds(dl, ds, lines::AbstractUnitRange, samples::AbstractUnit
         end
         s == last(samples) && break
         s = min(_next_mark(s, _SSTEP), last(samples))
+    end
+    return (ymin, ymax, xmin, xmax)
+end
+
+# No cell to bound: a per-pixel raster offers no corners whose extremes bound the interior, so every
+# pixel the window reaches has to be read.
+function _support_bounds_exhaustive(dl, ds, lines::AbstractUnitRange, samples::AbstractUnitRange)
+    ymin = xmin = Inf
+    ymax = xmax = -Inf
+    for s in samples, l in lines
+        y = l + dl(l, s) + 1.0
+        x = s + ds(l, s) + 1.0
+        ymin = min(ymin, y); ymax = max(ymax, y)
+        xmin = min(xmin, x); xmax = max(xmax, x)
     end
     return (ymin, ymax, xmin, xmax)
 end
