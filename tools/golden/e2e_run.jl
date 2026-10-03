@@ -402,7 +402,19 @@ function e2e_imagery(s::Setup)
         dem = joinpath(s.run, "dem.tif")
         isfile(dem) || error("no dem.tif in $(s.run); the secondary's resample solves for terrain " *
                             "height, so the pair cannot be coregistered without one")
-        return (radar_mosaic(rp, sws), ResampledMosaic(rp, sp, sws, dem_sampler(dem)))
+        # Replayed, not solved fresh: a burst's own `rdr2geo`/resample is as path-dependent as
+        # `S1-SLC`'s (see that branch's comment above), and `rung_coregister`'s own reference and
+        # secondary mosaics — gated bit-exact against this run's captured `reference.tif`/
+        # `secondary.tif` — use exactly this offset/grid pairing.
+        refoff = _reference_offsets(s.run, sws)
+        refoff === missing && error("$(basename(c.product)): the reference bursts were resampled " *
+            "against a cached static layer and this run kept no product/, so the offsets they " *
+            "resampled with are not available to replay")
+        ref = radar_mosaic(rp, sws; offsets = refoff, grid = _reference_grid(s.run, sws))
+        sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem);
+                              offsets = _secondary_offsets(s.run, sws),
+                              grid = _secondary_grid(s.run, sws))
+        return (ref, sec)
     end
     early, late = acquisition_order(c)
     want = reverse(s.pair.coordinate.size)
