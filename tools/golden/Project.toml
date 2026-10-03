@@ -24,10 +24,12 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [sources]
-AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+# Pinned to the tag validated against the Python reference, not `main`: past `v0.1.0`, this
+# package's own development and each dependency's diverge independently.
+AutoRIFT = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
 FastGeoProjections = {rev = "main", url = "https://github.com/alex-s-gardner/FastGeoProjections.jl"}
-ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
+ImagePairGeometry = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
 ItsLiveOffsetProduction = {path = "../.."}
-OpticalDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
-SLCDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
+OpticalDatasets = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
+SLCDatasets = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
 ZipArchives = {rev = "fix-zip64-version-needed-gate", url = "https://github.com/alex-s-gardner/ZipArchives.jl"}

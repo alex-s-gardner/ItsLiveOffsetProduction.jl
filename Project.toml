@@ -38,9 +38,11 @@ julia = "1.11"
 # is declared even though no code here uses it: `ImagePairGeometry` requires a version newer than the
 # registered one, and Pkg resolves a `[sources]` entry only for a package that is also in `[deps]`.
 [sources]
-AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+# Pinned to the tag validated against the Python reference, not `main`: past `v0.1.0`, this
+# package's own development and each dependency's diverge independently.
+AutoRIFT = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
 FastGeoProjections = {rev = "main", url = "https://github.com/alex-s-gardner/FastGeoProjections.jl"}
-ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
+ImagePairGeometry = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
 
 [extras]
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
