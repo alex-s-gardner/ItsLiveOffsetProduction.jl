@@ -236,7 +236,12 @@ function _s1_name_fields(name::AbstractString)
     parts = split(name, '_')
     length(parts) == 10 || throw(ArgumentError(
         "\"$name\" does not split into a Sentinel-1 product id's 10 underscore-delimited fields"))
-    return (; satellite = parts[1][2:end], orbit = parts[8], datatake = parts[9], product_id = parts[10])
+    # `String`, not the bare `SubString` `split`/indexing return: a `SubString` that doesn't reach
+    # the parent's own end carries no null terminator of its own, and the netCDF attribute write
+    # reads straight through to the parent's — every field but the last (`product_id`, which does
+    # reach the end) came out on disk with the rest of `name` appended until this was added.
+    return (; satellite = String(parts[1][2:end]), orbit = String(parts[8]),
+            datatake = String(parts[9]), product_id = String(parts[10]))
 end
 
 """
