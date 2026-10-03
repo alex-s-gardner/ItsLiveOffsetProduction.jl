@@ -312,15 +312,28 @@ function e2e_imagery(s::Setup)
         # over the *annotation's* per-burst domain regardless of `grid`, so forcing a larger `grid` onto
         # it without real offsets samples past the lattice's domain and decorrelates every pixel — this
         # was measured directly (0 of 11.5M points), not assumed.
-        refoff = _reference_offsets(s.run, sws)
-        refoff === missing && error("$(basename(s.run)): the reference bursts were resampled against a \
-                                     cached static layer and this run kept no product/, so the mosaic's \
-                                     offsets cannot be replayed")
-        refgrid = refoff === nothing ? nothing : _reference_grid(s.run, sws)
-        ref = radar_mosaic(rp, sws; offsets = refoff, grid = refgrid)
-        secoff = _secondary_offsets(s.run, sws)
-        secgrid = secoff === nothing ? nothing : _secondary_grid(s.run, sws)
-        sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff, grid = secgrid)
+        #
+        # **Gated on `cslc_grid`, not on `_reference_offsets` alone.** `_reference_offsets`/
+        # `_secondary_offsets` can report `missing` (a `product/` with some but not every subswath
+        # resampled) even on a run `cslc_grid` reads as plain annotation-grid — `product/` existing is
+        # not the same claim as the geogrid depending on it. Replaying is only needed, and only
+        # possible, when `cslc_grid` itself is not `nothing`.
+        if cslc_grid(s.run, sws) === nothing
+            ref = radar_mosaic(rp, sws)
+            sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem))
+        else
+            refoff = _reference_offsets(s.run, sws)
+            refoff isa Function || error("$(basename(s.run)): the geogrid was sized from a CSLC but the \
+                                          reference's own resampled burst dirs are incomplete " *
+                                          "(refoff = $(repr(refoff)), not a replayable function)")
+            secoff = _secondary_offsets(s.run, sws)
+            secoff isa Function || error("$(basename(s.run)): the geogrid was sized from a CSLC but the \
+                                          secondary's own resampled burst dirs are incomplete (no \
+                                          offsets to replay)")
+            ref = radar_mosaic(rp, sws; offsets = refoff, grid = _reference_grid(s.run, sws))
+            sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff,
+                                  grid = _secondary_grid(s.run, sws))
+        end
         size(ref) == size(sec) || error("the reference mosaic is $(size(ref)) and the resampled " *
                                         "secondary $(size(sec))")
         co = s.pair.coordinate
