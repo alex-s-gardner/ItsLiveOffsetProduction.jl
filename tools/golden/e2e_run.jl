@@ -244,6 +244,58 @@ function crop_overlap(img::AbstractMatrix, off::NTuple{2,Int}, want::Tuple{Int,I
 end
 
 """
+    _s1_burst_offsets(run, sw; secondary = false) -> Union{Function,Nothing}
+
+[`_reference_offsets`](@ref)/[`_secondary_offsets`](@ref)'s per-burst closure, but index-correct and
+total over every burst of subswath `sw`, not only the resampled ones.
+
+A burst whose cached static-topography layer missed gets `rdr2geo` run fresh for it instead
+(`container.log`: "Unable to find static correction file ... `rdr2geo` will be run for this burst"),
+which writes `x.tif`/`y.tif`/`z.tif` beside the burst rather than `azimuth.off`/`range.off` —
+`resampled_burst_dirs` finds nothing there and drops the burst from its `Vector` entirely, which
+*shifts* every burst after it onto the wrong index rather than leaving a hole at the right one. This
+recovers the correct position by sorting on each directory's own burst number (`..._091887_iw1`, taken
+from the name) instead of position in that filtered list, and gives a missed burst identity offsets
+`(0, 0)` rather than erroring.
+
+Identity is the right fallback for the **reference**: `cslc_grid`'s own docstring is why — "a reference
+written by `rdr2geo` has no offsets and its CSLC is the annotation's burst" — this burst's amplitude is
+exactly what the no-offsets path already reads, and `secondary_swath_amplitude`'s deramp doesn't depend
+on displacement, so `(0, 0)` reads it unmodified. For the **secondary** it is only an approximation —
+a real cross-acquisition coregistration shift would be lost — but `product_sec` has not been seen
+short a burst on any case this harness runs, so the gap this covers is reference-only in practice.
+
+`nothing` when `run` holds no `product`/`product_sec` for `sw` at all, matching the two functions above.
+"""
+function _s1_burst_offsets(run::AbstractString, sw::Integer; secondary::Bool = false)
+    root = joinpath(run, secondary ? "product_sec" : "product")
+    isdir(root) || return nothing
+    suffix = "_iw$sw"
+    ids = Int[]
+    dirs = Dict{Int,String}()
+    for name in readdir(root)
+        endswith(name, suffix) || continue
+        m = match(r"_(\d+)_iw\d+$", name)
+        m === nothing && continue
+        n = parse(Int, only(m.captures))
+        push!(ids, n)
+        dirs[n] = joinpath(root, name)
+    end
+    isempty(ids) && return nothing
+    sort!(ids)
+    offdirs = Dict{Int,String}()
+    for n in ids
+        for date in sort!(readdir(dirs[n]))
+            d = joinpath(dirs[n], date)
+            isdir(d) && isfile(joinpath(d, "azimuth.off")) && (offdirs[n] = d; break)
+        end
+    end
+    zero_fn = (l, s) -> 0.0
+    identity = (zero_fn, zero_fn)
+    return i -> (n = ids[i]; haskey(offdirs, n) ? burst_offsets(offdirs[n]) : identity)
+end
+
+"""
     e2e_imagery(s::Setup) -> (reference, secondary)
 
 The correlator's two images, built from the granule, in acquisition order.
@@ -322,17 +374,19 @@ function e2e_imagery(s::Setup)
             ref = radar_mosaic(rp, sws)
             sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem))
         else
-            refoff = _reference_offsets(s.run, sws)
-            refoff isa Function || error("$(basename(s.run)): the geogrid was sized from a CSLC but the \
-                                          reference's own resampled burst dirs are incomplete " *
-                                          "(refoff = $(repr(refoff)), not a replayable function)")
-            secoff = _secondary_offsets(s.run, sws)
-            secoff isa Function || error("$(basename(s.run)): the geogrid was sized from a CSLC but the \
-                                          secondary's own resampled burst dirs are incomplete (no \
-                                          offsets to replay)")
-            ref = radar_mosaic(rp, sws; offsets = refoff, grid = _reference_grid(s.run, sws))
-            sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff,
-                                  grid = _secondary_grid(s.run, sws))
+            # `_s1_burst_offsets`, not `_reference_offsets`/`_secondary_offsets`: this run's `product/`
+            # has every burst's directory but not every burst's `azimuth.off` (some were resampled
+            # against a cached static layer, some ran fresh through `rdr2geo`), and the shared functions
+            # drop a burst missing the latter rather than filling it with an identity offset.
+            # Both mosaics are placed on the *reference's* grid, not independently on each one's own:
+            # `merge_bursts_in_swath` takes its azimuth placement and range window from the reference
+            # burst and applies both to the secondary (`radar_mosaic`'s docstring), so `_secondary_grid`
+            # (what the secondary's own resample used) is the wrong grid to merge it onto.
+            refgrid = _reference_grid(s.run, sws)
+            refoff = sw -> _s1_burst_offsets(s.run, sw)
+            secoff = sw -> _s1_burst_offsets(s.run, sw; secondary = true)
+            ref = radar_mosaic(rp, sws; offsets = refoff, grid = refgrid)
+            sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff, grid = refgrid)
         end
         size(ref) == size(sec) || error("the reference mosaic is $(size(ref)) and the resampled " *
                                         "secondary $(size(sec))")
