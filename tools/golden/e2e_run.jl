@@ -19,6 +19,11 @@
 #               scene with the filter `process.py` applies to a native scene, or the reference mosaic
 #               and a lazily resampled secondary for a radar burst pair
 #   correlate   `autorift` at the block `block_size_for` picks
+#   package     `write_product` of an `ItsLiveInput` built from `dx`/`dy` and the pair's metadata —
+#               timed, not byte-exact: unlike `julia_e2e.jl`'s `native_run`, this correlates the
+#               filtered `Float32` field rather than reproducing the driver's `UInt8` quantization
+#               (see the module docstring above), so what it packages is a plausible product on the
+#               right grid rather than one that would agree with the reference's own.
 #
 # Peak is the whole run's, sampled: the point of measuring a chain rather than its last stage is that
 # the earlier stages are what a peak is usually made of.
@@ -35,6 +40,7 @@
 include("e2e.jl")
 include("nisar.jl")      # the NISAR crop and the RSLC coregistration
 include("tilecache.jl")  # a derived image kept on disk, so a later pass reads instead of re-deriving
+include("packaging.jl")  # `ItsLiveInput` metadata/georef/swath-bias, for the `package` stage below
 include(joinpath(dirname(@__DIR__), "ab", "memtrace.jl"))
 
 using Printf
@@ -299,22 +305,28 @@ function e2e_imagery(s::Setup)
         mk(g) = Sentinel1Product(stage_safe(g; search = safes); orbit = s1_orbit(s.run, g),
                                  polarization = lowercase(s1_polarization(g)), swaths = sws)
         rp, sp = mk(early), mk(late)
-        ref = radar_mosaic(rp, sws)
-        sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem))
+        # `s1_pair` sizes the geogrid off `cslc_grid` when the run kept a CSLC, which is the grid COMPASS
+        # resampled both acquisitions onto rather than the annotation's own burst — 1640 x 21458 against
+        # 1504 x 21530 on IW1. Reaching that grid means replaying each acquisition's own resample
+        # (`offsets`), not just overriding `grid`: `ResampledSwath`'s DEM-based lattice is always built
+        # over the *annotation's* per-burst domain regardless of `grid`, so forcing a larger `grid` onto
+        # it without real offsets samples past the lattice's domain and decorrelates every pixel — this
+        # was measured directly (0 of 11.5M points), not assumed.
+        refoff = _reference_offsets(s.run, sws)
+        refoff === missing && error("$(basename(s.run)): the reference bursts were resampled against a \
+                                     cached static layer and this run kept no product/, so the mosaic's \
+                                     offsets cannot be replayed")
+        refgrid = refoff === nothing ? nothing : _reference_grid(s.run, sws)
+        ref = radar_mosaic(rp, sws; offsets = refoff, grid = refgrid)
+        secoff = _secondary_offsets(s.run, sws)
+        secgrid = secoff === nothing ? nothing : _secondary_grid(s.run, sws)
+        sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff, grid = secgrid)
         size(ref) == size(sec) || error("the reference mosaic is $(size(ref)) and the resampled " *
                                         "secondary $(size(sec))")
         co = s.pair.coordinate
-        # **Fail rather than correlate on a grid the point set is not on.** `s1_pair` takes the merged
-        # shape from `cslc_grid` where the run kept a CSLC, and both acquisitions' CSLCs sit on the grid
-        # COMPASS resampled onto — 1640 x 21458 against the annotation's 1504 x 21530 on IW1 — so the
-        # reference mosaic is itself a resample there and not a merge of raw bursts. Reproducing it needs
-        # the reference's own coregistration target, which no rung derives yet.
         (co.nlines, co.nsamples) == size(ref) || error(
             "the geogrid was built on a $(co.nlines) x $(co.nsamples) mosaic and the imagery is " *
-            "$(size(ref)); the point set and the pixels are on different grids" *
-            (isnothing(cslc_grid(s.run, sws)) ? "" :
-             ". $(basename(s.run)) holds a CSLC, so the geogrid is on the resampled grid and this " *
-             "mosaic is on the annotation's"))
+            "$(size(ref)); the point set and the pixels are on different grids")
         return (ref, sec)
     end
     if c.platform == "S1-BURST"
@@ -434,6 +446,32 @@ function run_case(c::GoldenCase; n::Union{Integer,Nothing} = nothing,
         blk[] = (b.X, b.Y)
         t = @elapsed out[] = AutoRIFT.autorift(i2, i1, grid, p, (b.X, b.Y), 0, fct)
         push!(stages, "correlate" => t)
+
+        t = @elapsed begin
+            r = out[]
+            dx = Float32.(r.dx)
+            dy = DY_SIGN .* Float32.(r.dy)
+            chipx = UInt16.(r.chip_size)
+            interp = Matrix{Bool}(r.interpolated)
+            search = permutedims(s.geometry.search_x)
+            roi = ItsLiveOffsetProduction.roi_valid_percentage(chipx, search)
+            coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
+            refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
+            info = radar_sensor(c) ? radar_img_pair_info(c, s, roi) : native_img_pair_info(c, s, roi)
+            radar = radar_pair(c)
+            pair_type = radar ? :radar : :optical
+            coordinates = radar ? "radar, map" : MOTION_COORDINATES
+            dt_seconds = radar ? s.pair.dt : nothing
+            georef = radar ? radar_georef(s) : native_georef(s)
+            swath_bias = radar ? s1_swath_bias(c, s, p) : nothing
+            input = ItsLiveOffsetProduction.ItsLiveInput(
+                pair_type, DETECTION_METHOD, coordinates, AUTORIFT_VERSION,
+                replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), dt_seconds,
+                georef, info, coeffs, refv, ssm, swath_bias,
+                dx, dy, chipx, AutoRIFT.chip_size_scale(s.geometry), interp)
+            ItsLiveOffsetProduction.write_product(joinpath(s.run, "e2e_run_package.nc"), input)
+        end
+        push!(stages, "package" => t)
         return nothing
     end
 
@@ -493,6 +531,7 @@ function tsv_line(r::E2EResult)
                  @sprintf("%.2f", get(st, "grid", NaN)),
                  @sprintf("%.2f", get(st, "imagery", NaN)),
                  @sprintf("%.2f", get(st, "correlate", NaN)),
+                 @sprintf("%.2f", get(st, "package", NaN)),
                  @sprintf("%.2f", total_seconds(r)), @sprintf("%.1f", r.cpu),
                  string(r.peak), string(r.floor),
                  "$(r.scene[1])x$(r.scene[2])", "$(r.block[1])x$(r.block[2])",
@@ -500,8 +539,8 @@ function tsv_line(r::E2EResult)
 end
 
 const TSV_HEADER = join(["case", "platform", "geometry_s", "grid_s", "imagery_s", "correlate_s",
-                         "total_s", "cpu_s", "peak_bytes", "floor_bytes", "scene", "block",
-                         "npoints", "measured", "filter"], '\t')
+                         "package_s", "total_s", "cpu_s", "peak_bytes", "floor_bytes", "scene",
+                         "block", "npoints", "measured", "filter"], '\t')
 
 function main(args)
     isempty(args) && error("usage: e2e_run.jl <product-name-fragment>... | --all " *
