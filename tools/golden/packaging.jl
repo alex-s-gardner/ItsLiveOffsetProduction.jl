@@ -97,12 +97,25 @@ function native_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
 end
 
 # `netcdf_output.py:427,438`. The year is the wall clock's, as it is there.
+#
+# Sentinel-1 shares `mission_img1 == "S"` with Sentinel-2 (`OpticalDatasets.sentinel2_identification`
+# collapses both to the single-letter mission the rest of `ImagePairInfo` uses), so the optical sensor
+# tag — `"MSI"` for Sentinel-2, against `"C"` for Sentinel-1's C-band — is what distinguishes them; a
+# radar pair's own clause, if the reference turns out to have one, is unverified and not added here.
+# The attributed year is `acquisition_date_img1`'s, matching the Landsat clause's own choice of img1
+# for the satellite it names — checked only on a pair where both acquisitions are the same year.
 function product_source(info::ItsLiveOffsetProduction.ImagePairInfo)
     s = "NASA MEaSUREs ITS_LIVE project. Processed by ASF DAAC HyP3 $(Dates.year(Dates.now())) " *
         "using the $PLUGIN_NAME plugin version $PLUGIN_VERSION running autoRIFT version " *
         AUTORIFT_VERSION
-    startswith(info.mission_img1, "L") || return s
-    return s * ". Landsat-$(info.satellite_img1) images courtesy of the U.S. Geological Survey"
+    if startswith(info.mission_img1, "L")
+        return s * ". Landsat-$(info.satellite_img1) images courtesy of the U.S. Geological Survey"
+    end
+    if info.mission_img1 == "S" && get(info.extra, "sensor_img1", "") == "MSI"
+        return s * ". Contains modified Copernicus Sentinel data " *
+               "$(Dates.year(info.acquisition_date_img1)), processed by ESA"
+    end
+    return s
 end
 
 """
