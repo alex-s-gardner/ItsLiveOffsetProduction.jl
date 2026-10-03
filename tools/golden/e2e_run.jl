@@ -77,12 +77,13 @@ expanded here too. A burst pair is already local — its SAFE trees are in the r
 pair is read from the products the driver downloaded, so neither has anything to stage.
 """
 function stage(c::GoldenCase)
-    early, late = acquisition_order(c)
     if c.platform == "S1-SLC"
+        early, late = acquisition_order(c)
         dirs = cached_runs(c, resolve_run(c))
         return [stage_safe(g; search = dirs) for g in (early, late)]
     end
     (startswith(c.platform, "L") || c.platform == "S2") || return String[]
+    early, late = acquisition_order(c)
     out = String[]
     for (which, name) in ((:reference, early), (:secondary, late))
         haskey(STAGED, name) && (push!(out, STAGED[name]); continue)
