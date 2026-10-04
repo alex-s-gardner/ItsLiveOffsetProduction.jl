@@ -14,13 +14,9 @@
 # `validate_itslive_write.jl` writes a product — but from the reference's own captured arrays. So no run
 # has produced a product from the imagery alone, which is the claim this makes.
 #
-# Five things sit between those two scripts, all of them the ITS_LIVE driver's rather than the
+# Four things sit between those two scripts, all of them the ITS_LIVE driver's rather than the
 # correlator's, and none reproduced by any rung of the ladder:
 #
-#   bytes       the overlap filtered and quantized to 256 levels, which is what the reference's
-#               correlator is handed (`uniform_data_type`). `e2e_run.jl` correlates the filtered
-#               `Float32` field instead — a different C++ template with a different answer, which
-#               `stages.jl`'s header measures at up to 7 px on one scene.
 #   nodata      the imagery's zero mask sampled at each grid point, which zeroes the search limit and
 #               both chip bounds before correlation (`testautoRIFT.py:337-403`).
 #   chop        the grid truncated to a multiple of `max(ChipSizeMaxX) / ChipSize0X`
@@ -34,7 +30,7 @@
 # reference's `Dx`, `Dy`, `ChipSizeX`, `InterpMask` and `SearchLimitX` on the chopped grid and its
 # `noDataMask` at `origSize` — every array this script derives, before any stable shift, on exactly the
 # grids this produces them on. A product diff alone cannot say whether a difference entered at the mask,
-# the chop, the bytes or the correlator; that mode can.
+# the chop or the correlator; that mode can.
 
 include("e2e_run.jl")      # `setup`, `_chop_to`, `_cropped_scene`, the memory trace, `packaging.jl`
 include("product.jl")
@@ -74,15 +70,31 @@ const RUN_FOR_OUTPUT = 900
 # ---------------------------------------------------------------------------
 
 """
-    native_imagery(s::Setup) -> (bytes_early, bytes_late, declined, declined_shifted, filter)
+    native_imagery(s::Setup) -> (early, late, declined, declined_shifted, filter)
 
-The two byte images the correlator is handed, and the driver's no-data mask, in one pass over each scene.
+The two filtered `Float32` images the correlator is handed, and the driver's no-data mask, in one pass
+over each scene.
 
-**One pass, because the scene is read once and nothing full-size is copied.** The window is read straight
-into a `Float32` buffer, so the `UInt16` scene is never materialized and there is no separate conversion
-pass over 291 million pixels; the filter writes into a second buffer with
+**Not quantized to `UInt8`.** The reference's `uniform_data_type` (`autoRIFT.py:359-384`) exists for its
+own memory budget, not for anything the correlator needs — `AutoRIFT.jl`'s correlator takes any element
+type, and `ZNCC` already removes each correlation window's own mean and scale, so a whole-image mean,
+standard deviation and rescale onto 256 levels buys nothing here, at the cost `dev/CORRECTNESS.md` item
+4b on `AutoRIFT.jl` quantifies — up to 7 px on one scene, a 31x tie-breaking disparity in the base
+level's weakest correlation quartile. So this is a deliberate divergence from what the Python reference's
+current `DataType = 0` default produces, matching `e2e_run.jl`'s own imagery pipeline rather than
+`julia_e2e.jl`'s former byte path.
+
+**One pass, because the scene is read once and nothing full-size is copied before filtering.** The
+window is read straight into a `Float32` buffer, so the `UInt16` scene is never materialized and there is
+no separate conversion pass over 291 million pixels; the filter writes into a second buffer with
 [`AutoRIFT.highpass!`](@ref); and both buffers are reused for the second scene rather than reallocated.
-Four full-scene arrays live at once where the allocating form held eight.
+
+**Removing the quantization removes two whole-image passes, not an array.** `bytescale`'s own output
+replaced `filtered` as what got kept, so the array count is the same either way — one copy per scene,
+now of `filtered` itself rather than of `bytescale`'s rescaled result. What is gone is the mean-then-
+variance reduction and the elementwise rescale-round-clamp pass `bytescale` ran to compress the field
+onto 256 levels; the kept copy is `Float32`, four bytes against `UInt8`'s one, because full precision is
+the entire reason not to quantize — this was never a memory optimization available to give up for free.
 
 **The mask is accumulated here because the unfiltered values are only available here.** A point is
 declined where *either* scene reads zero (`testautoRIFT.py:337-349`), and zero converts exactly, so the
@@ -91,10 +103,6 @@ buffer be reused: the alternative holds both scenes' pixels at once purely to co
 
 Both sampling offsets are accumulated, so `--compare-intermediate` can score the choice without the
 imagery being retained for it.
-
-Quantizing is not optional. `uniform_data_type` collapses the filtered field onto 256 levels before
-`runAutorift` sees it, so production reaches the reference's `UInt8` correlator template; correlating the
-`Float32` field reaches a different one.
 """
 function native_imagery(s::Setup)
     c = s.case
@@ -124,7 +132,7 @@ function native_imagery(s::Setup)
     filtered = Matrix{Float32}(undef, want)    # `highpass!` needs a destination distinct from its input
     eroded = Matrix{Bool}(undef, want)         # `_filtered!`'s mask buffer, reused across both scenes
     keep = trues(want)
-    bytes = Vector{Matrix{UInt8}}()
+    images = Vector{Matrix{Float32}}()
 
     for (path, off) in ((s.reference_path, s.pair.reference_offset),
                         (s.secondary_path, s.pair.secondary_offset))
@@ -133,11 +141,11 @@ function native_imagery(s::Setup)
         _accumulate_zeros!(shifted, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET + 1)
         AutoRIFT.highpass!(filtered, field, keep, m.width)
         AutoRIFT._filtered!(filtered, eroded, keep, m.width)
-        # `keep`, not `eroded`: the reference quantizes over the whole array, and `bytescale`'s mean and
-        # standard deviation are what the mask restricts.
-        push!(bytes, AutoRIFT.bytescale(filtered, keep))
+        # Copied, since `filtered` is reused for the second scene; `bytescale`'s own allocation used to
+        # be what made this copy, incidentally, when quantizing was still the default.
+        push!(images, copy(filtered))
     end
-    return (bytes[1], bytes[2], declined, shifted, m)
+    return (images[1], images[2], declined, shifted, m)
 end
 
 """
@@ -304,11 +312,13 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    radar_imagery(s::Setup) -> (bytes_early, bytes_late, declined, declined_shifted, filter)
+    radar_imagery(s::Setup) -> (early, late, declined, declined_shifted, filter)
 
-[`native_imagery`](@ref) for a radar pair: the correlator's two byte images and the driver's no-data
-mask, sourced from [`e2e_imagery`](@ref) (the same mosaic/RSLC/GSLC reader `e2e_run.jl` uses, already
-validated stage by stage against the reference) rather than a GDAL scene file.
+[`native_imagery`](@ref) for a radar pair: the correlator's two filtered `Float32` images and the
+driver's no-data mask, sourced from [`e2e_imagery`](@ref) (the same mosaic/RSLC/GSLC reader
+`e2e_run.jl` uses, already validated stage by stage against the reference) rather than a GDAL scene
+file. Not quantized to `UInt8`, for the same reason `native_imagery` is not — see its docstring and
+`dev/CORRECTNESS.md` item 4b on `AutoRIFT.jl`.
 
 **No offset.** An optical pair's two scenes are the raw, uncropped granules, so `native_imagery` crops
 each to the overlap at its own coregistration offset. A radar pair's secondary is instead resampled
@@ -316,10 +326,11 @@ onto the reference's own mosaic or RSLC grid (`ResampledMosaic`/`ResampledRSLC`)
 `e2e_imagery` returns already share the geometry's grid and the location bands apply to them with no
 shift.
 
-NISAR-L2 (GSLC) has no route here: its band is ~13 billion pixels, and reproducing the reference's
-whole-array `uniform_data_type` quantization over that needs a memory-bounded, tile-at-a-time pass
-nothing in this package implements yet. Erroring here is deliberate rather than attempting an
-allocation sized for it.
+NISAR-L2 (GSLC) has no route here: its band is ~13 billion pixels, and `field`/`filtered`/`eroded` below
+are each a dense array the size of the whole band — about 52 GiB for `filtered` alone at `Float32` — so
+this fails on the materialization itself, not on quantizing it afterward. A memory-bounded, tile-at-a-
+time highpass pass is what GSLC needs and nothing in this package implements yet. Erroring here is
+deliberate rather than attempting an allocation sized for it.
 
 **NISAR-L1 (RSLC) does not share L2's `UInt8`-before-highpass defect.** `rung_bytes`'s skip message
 for NISAR-L2 names the symptom: `loadProduct` hard-casts NISAR to `UInt8` before filtering, so the
@@ -332,7 +343,7 @@ one for L1 and needs no `UInt8`-saturating variant.
 function radar_imagery(s::Setup)
     c = s.case
     c.platform == "NISAR-L2" && error(
-        "$(basename(c.product)): no memory-bounded highpass+quantize pass exists yet for a GSLC's " *
+        "$(basename(c.product)): no memory-bounded highpass pass exists yet for a GSLC's " *
         "~13-billion-pixel band; see radar_imagery's docstring")
     m = correlator_filter(c)
     m isa AutoRIFT.Highpass || error(
@@ -352,7 +363,7 @@ function radar_imagery(s::Setup)
     filtered = Matrix{Float32}(undef, want)
     eroded = Matrix{Bool}(undef, want)
     keep = trues(want)
-    bytes = Vector{Matrix{UInt8}}()
+    images = Vector{Matrix{Float32}}()
 
     # Each side is read once through its own range-indexed `getindex` — a plain copy for the dense S1
     # mosaic, a block-at-a-time resample or HDF5 read for the lazy NISAR-L1/`ResampledMosaic` types —
@@ -363,9 +374,10 @@ function radar_imagery(s::Setup)
         _accumulate_zeros!(shifted, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET + 1)
         AutoRIFT.highpass!(filtered, field, keep, m.width)
         AutoRIFT._filtered!(filtered, eroded, keep, m.width)
-        push!(bytes, AutoRIFT.bytescale(filtered, keep))
+        # Copied, since `filtered` is reused for the second side.
+        push!(images, copy(filtered))
     end
-    return (bytes[1], bytes[2], declined, shifted, m)
+    return (images[1], images[2], declined, shifted, m)
 end
 
 # ---------------------------------------------------------------------------

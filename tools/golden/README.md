@@ -54,18 +54,15 @@ Scripts here load both `AutoRIFT` and `ItsLiveOffsetProduction`, so the moved AP
 
 Over sparse glacier coverage much of a scene is never correlated, so downloading all of it is waste.
 `OpticalRaster` is already a `DiskArrays` array with a real chunk grid, so per-chunk reads are available;
-what is missing is a cache and a consumer that asks for chunks rather than the whole overlap. This is
-**deferred, not rejected**, and the blocker is a single thing that is on its way out.
+what is missing is a cache and a consumer that asks for chunks rather than the whole overlap. This was
+**deferred, not rejected**, blocked on a single thing that is now gone.
 
-**The blocker.** `AutoRIFT.bytescale` is a two-pass whole-array reduction whose global mean and sample
-standard deviation set every quantized pixel, so a chunk never downloaded changes the quantization of
-every pixel that was. It is the only image-wide statistic left in this path — `julia_e2e.jl` applies
-`highpass` (bounded local reach) and passes `preprocess = :none` to the correlator — and it exists only
-because the production driver sets `DataType = 0`. AutoRIFT's own register records that quantization as
-matched-not-endorsed and states that production is moving to `Float32` (its
-`tools/golden/README.md`, "Matched for agreement, not endorsed", the `UInt8` row), with the float path
-bit-identical while the byte path fails on 1.7% of points by up to 36 px. **When `UInt8` goes, no
-image-wide statistic remains and this becomes viable.**
+**The former blocker, cleared.** `AutoRIFT.bytescale` was a two-pass whole-array reduction whose global
+mean and sample standard deviation set every quantized pixel, so a chunk never downloaded would have
+changed the quantization of every pixel that was. `native_imagery`/`radar_imagery` no longer call it —
+`dev/CORRECTNESS.md` item 4b on `AutoRIFT.jl` records the decision — so `highpass` (bounded local reach)
+is now the only pass in this path, and nothing here still needs an image-wide statistic. This change is
+unblocked; it has not been made.
 
 **What is still required even then.** `_accumulate_zeros!` samples the scene at grid points to build the
 no-data mask, so a chunk holding grid points is still read. That is point-wise rather than global, which
@@ -95,16 +92,19 @@ fewer bytes saves. The condition on this change is that it not degrade runtime.
 
 ## Future change: blocking the correlation to cut peak memory
 
-Separate from the above, and the larger lever on memory. The L8 case peaks at 12.46 GiB resident, of
-which the imagery is about 3.0 GiB — two full-scene `Float32` buffers at 1.09 GiB each, a `Bool`, and two
-`UInt8`. The remainder is the untiled correlator, which `process_block_size` bounds and which needs no
-lazy reading at all. Blocking has been measured elsewhere in this codebase at 36–56% lower peak.
+Separate from the above, and the larger lever on memory. The L8 case peaked at 12.46 GiB resident, of
+which the imagery was about 3.0 GiB — two full-scene `Float32` buffers at 1.09 GiB each, a `Bool`, and
+two `UInt8`. **That figure predates removing `bytescale`** (previous section): the two retained
+per-scene images are now `Float32` copies rather than `UInt8` ones, four bytes a pixel against one, so
+the imagery share is larger now and the peak needs re-measuring rather than assumed unchanged. The
+remainder is the untiled correlator, which `process_block_size` bounds and which needs no lazy reading
+at all. Blocking has been measured elsewhere in this codebase at 36–56% lower peak.
 
 The change is small: `julia_e2e.jl` correlates with `AutoRIFT.autorift(b2, b1, grid, p)`, and the blocked
 form is `AutoRIFT.autorift(b2, b1, grid, p, (b.X, b.Y))` with
 `b = AutoRIFT.block_size_for(grid, p, size(b1))` — the five-positional method already exists, and
 `e2e_run.jl` does exactly this for the radar path. Neither `cache_budget` nor `filter_cache_tile` applies
-here: the byte images are resident and the correlator is given `preprocess = :none`, so no per-block
+here: the filtered images are resident and the correlator is given `preprocess = :none`, so no per-block
 filtering happens and the halo is the correlation reach alone.
 
 **What blocking costs, by grid type.** On axis-aligned grids it costs nothing in the answer: AutoRIFT's

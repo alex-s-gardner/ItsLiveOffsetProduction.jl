@@ -20,10 +20,11 @@
 #               and a lazily resampled secondary for a radar burst pair
 #   correlate   `autorift` at the block `block_size_for` picks
 #   package     `write_product` of an `ItsLiveInput` built from `dx`/`dy` and the pair's metadata —
-#               timed, not byte-exact: unlike `julia_e2e.jl`'s `native_run`, this correlates the
-#               filtered `Float32` field rather than reproducing the driver's `UInt8` quantization
-#               (see the module docstring above), so what it packages is a plausible product on the
-#               right grid rather than one that would agree with the reference's own.
+#               timed, and not otherwise distinguished from `julia_e2e.jl`'s `native_run` any more:
+#               both correlate the filtered `Float32` field rather than reproducing the driver's
+#               `UInt8` quantization (`dev/CORRECTNESS.md` item 4b on `AutoRIFT.jl`), so what either
+#               packages is the more accurate product on the right grid, not one that agrees with the
+#               reference's own `DataType = 0` output bit for bit.
 #
 # Peak is the whole run's, sampled: the point of measuring a chain rather than its last stage is that
 # the earlier stages are what a peak is usually made of.
