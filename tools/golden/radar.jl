@@ -821,7 +821,7 @@ function dem_sampler(path::AbstractString)
 end
 
 """
-    coregistration_offset(cr, cs, line, sample, height; iters = 4) -> (dline, dsample, h)
+    coregistration_offset(cr, cs, line, sample, height; iters = 20, tol = 0.01) -> (dline, dsample, h)
 
 Where the secondary images the ground point the reference images at `(line, sample)`, as an offset in
 the reference's own pixels.
@@ -832,7 +832,12 @@ zero-based, as the reference's indices are.
 
 **The terrain enters as an outer fixed point.** `rdr2geo` takes a constant height — all its callers in
 the geogrid supply one — so the DEM is iterated: solve at the current height, look the DEM up at the
-resulting position, solve again. Four passes, which is past convergence for Sentinel-1 geometry.
+resulting position, solve again, stopping once the height moves by less than `tol` meters between passes
+or `iters` passes are spent. Flat terrain converges in two or three passes. Near steep local relief —
+tens of meters of height change within one range pixel — the fixed point needs several more passes to
+settle, which is what `iters` has to leave room for; at a true layover edge there is no single consistent
+ground point for `(line, sample)` to begin with, and the cap exists to bound that cost rather than to
+assert the result there is reliable.
 
 **The offsets are computed from the solved time and range, not through `azimuth_index`.** Those helpers
 round to a whole line and sample for the geogrid's benefit, which is exactly the sub-pixel part a
@@ -860,7 +865,7 @@ through the peak over fifteen points gave +1.0162 +/- 0.0310 lines. The same cor
 *reference* on both sides peaks at `(0, 0)` with correlation 1.000, so the mosaic mapping is exact.
 """
 function coregistration_offset(cr, cs, line::Integer, sample::Integer, height;
-                               iters::Integer = 4)
+                               iters::Integer = 20, tol::Real = 0.01)
     el = Ellipsoid()
     az = cr.sensing_start + line / cr.prf
     rg = cr.starting_range + sample * cr.dr
@@ -869,7 +874,10 @@ function coregistration_offset(cr, cs, line::Integer, sample::Integer, height;
     for _ in 1:iters
         llh = ImagePairGeometry.rdr2geo(cr.orbit, el, az, rg; height = h,
                                        wavelength = cr.wavelength, side = cr.look_side)
-        h = height(llh[1] / ImagePairGeometry.DEG2RAD, llh[2] / ImagePairGeometry.DEG2RAD)
+        h_next = height(llh[1] / ImagePairGeometry.DEG2RAD, llh[2] / ImagePairGeometry.DEG2RAD)
+        converged = abs(h_next - h) < tol
+        h = h_next
+        converged && break
     end
     xyz = ImagePairGeometry.lonlat_to_xyz(el,
               ImagePairGeometry.SVector{3,Float64}(llh[1], llh[2], h))
