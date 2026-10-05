@@ -1075,10 +1075,20 @@ the same phase it does inside the whole burst, so reading one must not restart t
 """
 function deramped_burst(raster, rows::AbstractUnitRange, carrier;
                         cols::AbstractUnitRange = axes(raster, 2),
-                        origin::Tuple{Integer,Integer} = (0, 0))
+                        origin::Tuple{Integer,Integer} = (0, 0),
+                        scratch::Union{Matrix{ComplexF32},Nothing} = nothing)
     nr, nc = length(rows), length(cols)
     l0, s0 = Int(origin[1]), Int(origin[2])
-    out = Matrix{ComplexF32}(undef, nr, nc)
+    # `scratch` is sized to a burst's full extent, the fixed upper bound every band's `(nr, nc)` is
+    # clamped to, so the view below never reaches past it — see `secondary_swath_amplitude`, which
+    # allocates one such buffer and reuses it across every burst of a subswath rather than paying a
+    # fresh `undef` allocation per burst.
+    #
+    # Always a view, even with no `scratch`: both branches then return the same concrete `SubArray`
+    # type, where a `Matrix`-or-`SubArray` union would force a dynamic dispatch at every caller that
+    # goes on to index it — and `resample_burst`'s per-pixel loop is exactly such a caller.
+    buf = scratch === nothing ? Matrix{ComplexF32}(undef, nr, nc) : scratch
+    out = view(buf, 1:nr, 1:nc)
     # The carrier's range half is hoisted out of each column by `carrier_column`, leaving a degree-5
     # Horner sweep per pixel — see there for what the loop it replaces cost.
     #
@@ -1153,6 +1163,10 @@ unit phasor and cannot change a magnitude.
 `origin` is the burst-local zero-based `(line, sample)` of `deramped[1, 1]` and `extent` is the burst's
 own size, so `deramped` may be a band of the burst rather than all of it.
 
+`dest`, when given, is written in place and returned instead of a fresh array — a zeroed view into a
+caller's own mosaic, so the per-burst result lands there directly rather than being copied in after the
+fact.
+
 **The rejection is against `extent` and the read is against the band**, and the two have to be separate
 for a windowed result to equal a whole-burst one. A pixel whose eight-tap support leaves the *burst* is
 rejected by both, and must be: the reference's resampler has no samples there either. A pixel whose
@@ -1163,8 +1177,31 @@ mosaic — so it throws.
 function resample_burst(deramped, dl, ds, lines::AbstractUnitRange,
                         samples::AbstractUnitRange, valid = nothing; doppler = nothing,
                         origin::Tuple{Integer,Integer} = (0, 0),
-                        extent::Tuple{Integer,Integer} = size(deramped))
-    out = zeros(Float32, length(lines), length(samples))
+                        extent::Tuple{Integer,Integer} = size(deramped),
+                        dest::Union{AbstractMatrix{Float32},Nothing} = nothing)
+    # `dest`, when given, must already be zero: a pixel outside the eight-tap support or the valid
+    # region is skipped below rather than written, and a skipped pixel's zero is this function's own
+    # output there, not a leftover the caller promised to clear.
+    #
+    # **The buffer is chosen here, outside the threaded kernel, deliberately.** `out` assigned from an
+    # `if`/`else` and then captured by `Threads.@threads`'s inner closure forces Julia to box it —
+    # every one of the kernel's `out[ii, jj] = ...` writes then goes through that box — which measured
+    # 2x slower and 2x more allocation than allocating `out` fresh every call. A function barrier avoids
+    # it: `out` arrives at `_resample_burst!` as a plain argument, never reassigned, so each call
+    # specializes on its own concrete type with no box.
+    if dest === nothing
+        out = zeros(Float32, length(lines), length(samples))
+    else
+        size(dest) == (length(lines), length(samples)) || throw(DimensionMismatch(
+            "dest is $(size(dest)) but lines x samples is $((length(lines), length(samples)))"))
+        out = dest
+    end
+    return _resample_burst!(out, deramped, dl, ds, lines, samples, valid; doppler, origin, extent)
+end
+
+function _resample_burst!(out::AbstractMatrix{Float32}, deramped, dl, ds, lines::AbstractUnitRange,
+                          samples::AbstractUnitRange, valid; doppler, origin::Tuple{Integer,Integer},
+                          extent::Tuple{Integer,Integer})
     oy, ox = Int(origin[1]), Int(origin[2])
     ey, ex = Int(extent[1]), Int(extent[2])
     ny, nx = size(deramped)
@@ -1276,8 +1313,18 @@ function secondary_swath_amplitude(rp::Sentinel1Product, sp::Sentinel1Product, s
                                    offsets = nothing, grid = nothing)
     r = ResampledSwath(rp, sp, swath, dem; offsets, grid)
     out = zeros(Float32, size(r))
+    # One scratch buffer for the whole subswath rather than one `undef` allocation per burst: every
+    # burst of a subswath shares the same `extent` (the reference's lines/samples per burst), which is
+    # an upper bound on the band `deramped_burst` ever asks for.
+    lpb, spb = first(r.places).extent
+    scratch = Matrix{ComplexF32}(undef, lpb, spb)
+    # One burst at a time, deliberately: `deramped_burst` already runs `Threads.@threads` over every
+    # available thread to deramp a single burst, so spawning a task per burst here would only nest one
+    # saturated parallel region inside another — measured on an 8-burst subswath, that materialization
+    # loop costs the same wall time threaded as serial, 3.0 s either way, because there is no spare
+    # thread for the outer task to use.
     for p in r.places
-        out[p.mosaic_rows, p.mosaic_cols] = _resample_piece(r, p, p.lines, p.samples)
+        _resample_piece(r, p, p.lines, p.samples, view(out, p.mosaic_rows, p.mosaic_cols); scratch)
     end
     return (out, size(r, 1), size(r, 2))
 end
@@ -1491,13 +1538,18 @@ function _support_bounds_exhaustive(dl, ds, lines::AbstractUnitRange, samples::A
     return (ymin, ymax, xmin, xmax)
 end
 
-# One burst's contribution to a window, over the burst-local output indices `lines` x `samples`.
+# One burst's contribution to a window, over the burst-local output indices `lines` x `samples`,
+# written into `dest` and returned.
 #
 # The band read from the source is the support those outputs reach, clamped to the burst: a pixel whose
 # support leaves the burst is rejected by `resample_burst` and never read, so clamping cannot change an
 # answer.
+#
+# `scratch`, when given, replaces `deramped_burst`'s own `undef` allocation — see there — and must be
+# at least `p.extent` in each dimension, which every burst of one subswath shares as its upper bound.
 function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUnitRange,
-                         samples::AbstractUnitRange)
+                         samples::AbstractUnitRange, dest::AbstractMatrix{Float32};
+                         scratch::Union{AbstractMatrix{ComplexF32},Nothing} = nothing)
     lpb, spb = p.extent
     ymin, ymax, xmin, xmax = _support_bounds(p.dl, p.ds, lines, samples)
     brows = clamp(floor(Int, ymin) - 3, 1, lpb):clamp(ceil(Int, ymax) + 4, 1, lpb)
@@ -1506,7 +1558,7 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
 
     srows = (first(p.source_rows) - 1 + first(brows)):(first(p.source_rows) - 1 + last(brows))
     r.deramped[] += length(brows) * length(bcols)
-    deramped = deramped_burst(r.source, srows, p.carrier; cols = bcols, origin)
+    deramped = deramped_burst(r.source, srows, p.carrier; cols = bcols, origin, scratch)
     # **The resampler's source is the burst zeroed outside its own valid window, not the raw burst.**
     # `slc_to_vrt_file` writes a VRT of the burst's full shape whose `SimpleSource` covers only
     # `first_valid_line:last_valid_line` by `first_valid_sample:last_valid_sample`, with
@@ -1525,12 +1577,14 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
     # annotation's valid region. Guarding on the valid window declines 137,782 pixels `secondary.tif`
     # fills, to avoid filling 2,746 it does not — fifty times the error it removes.
     return resample_burst(deramped, p.dl, p.ds, lines, samples; doppler = p.extent, origin,
-                          extent = p.extent)
+                          extent = p.extent, dest)
 end
 
 function Base.getindex(r::ResampledSwath, rows::AbstractUnitRange, cols::AbstractUnitRange)
     checkbounds(r, rows, cols)
     out = zeros(Float32, length(rows), length(cols))
+    lpb, spb = first(r.places).extent
+    scratch = Matrix{ComplexF32}(undef, lpb, spb)
     for p in r.places
         mr = intersect(rows, p.mosaic_rows)
         isempty(mr) && continue
@@ -1541,9 +1595,9 @@ function Base.getindex(r::ResampledSwath, rows::AbstractUnitRange, cols::Abstrac
         u0 = first(mc) - first(p.mosaic_cols)
         lines = (first(p.lines) + t0):(first(p.lines) + t0 + length(mr) - 1)
         samples = (first(p.samples) + u0):(first(p.samples) + u0 + length(mc) - 1)
-        out[(first(mr) - first(rows) + 1):(last(mr) - first(rows) + 1),
-            (first(mc) - first(cols) + 1):(last(mc) - first(cols) + 1)] =
-            _resample_piece(r, p, lines, samples)
+        dest = view(out, (first(mr) - first(rows) + 1):(last(mr) - first(rows) + 1),
+                    (first(mc) - first(cols) + 1):(last(mc) - first(cols) + 1))
+        _resample_piece(r, p, lines, samples, dest; scratch)
     end
     return out
 end
