@@ -1050,7 +1050,12 @@ end
 # The values themselves are pixel indices of order 1e3 to 1e5, so nothing here approaches `Int`'s range.
 @inline _ifloor(x::Float64) = unsafe_trunc(Int, floor(x))
 
-@inline _tap_bin(f::Float64) = round(Int, f * SINC_SUBDIVISIONS) + 1
+# Same fix as `_ifloor`, for the same reason: `round(Int, x)` is `trunc(Int, round(x))` with a range
+# and `isinf`/`isnan` check on the way to `Int`, and `f ∈ [0, 1]` makes `f * SINC_SUBDIVISIONS` finite
+# and within `[0, SINC_SUBDIVISIONS]` by construction — nowhere near `Int`'s range, so the guard this
+# skips can never fire. `round(x)` alone (no target type) stays checked-free; only the `Int` conversion
+# after it was the cost.
+@inline _tap_bin(f::Float64) = unsafe_trunc(Int, round(f * SINC_SUBDIVISIONS)) + 1
 @inline sinc8_taps_at(k::Int) = ntuple(m -> @inbounds(SINC_TAPS[m, k]), 8)
 @inline sinc8_taps(f::Float64) = sinc8_taps_at(_tap_bin(f))
 
