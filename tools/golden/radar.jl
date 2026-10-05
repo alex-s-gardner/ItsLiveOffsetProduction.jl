@@ -457,14 +457,24 @@ function swath_amplitude(p::Sentinel1Product, swath::Integer)
     nlines = 1 + round(Int, (seconds_between(first(a.burst_start), last(a.burst_start)) +
                              (lpb - 1) * dt) / dt)
     out = zeros(Float32, nlines, spb)
-    for i in 1:n
-        # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
-        prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
-        nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
-        bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
-        mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
-        cols = (fvs[i] + 1):lvs[i]          # `slice(first_valid_sample, last_valid_sample)`
-        out[(mstart + 1):mend, cols] = amp(i, (bstart + 1):bend, cols)
+    # A task per burst. `amp` reads a disjoint window of the shared `StripedTiff`, which allocates its
+    # own gather buffer per call rather than sharing one — the same property `deramped_burst` relies on
+    # to deramp several column slabs at once — so the reads below are concurrent-safe. Computed in
+    # parallel and assigned into `out` serially, so the overlap-splitting arithmetic never has to be
+    # proven data-race-free on top of being correct.
+    pieces = fetch.(map(1:n) do i
+        Threads.@spawn begin
+            # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
+            prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
+            nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
+            bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
+            mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
+            cols = (fvs[i] + 1):lvs[i]      # `slice(first_valid_sample, last_valid_sample)`
+            (mstart, mend, cols, amp(i, (bstart + 1):bend, cols))
+        end
+    end)
+    for (mstart, mend, cols, pix) in pieces
+        out[(mstart + 1):mend, cols] = pix
     end
     return (out, nlines, spb)
 end
