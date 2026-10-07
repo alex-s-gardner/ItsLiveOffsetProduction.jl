@@ -821,72 +821,47 @@ function dem_sampler(path::AbstractString)
 end
 
 """
-    coregistration_offset(cr, cs, line, sample, height; iters = 20, tol = 0.01) -> (dline, dsample, h)
+    coregistration_offset(cr, cs, line, sample, height) -> (dline, dsample, h)
 
 Where the secondary images the ground point the reference images at `(line, sample)`, as an offset in
-the reference's own pixels.
+the reference's own pixels, and the terrain height there.
 
-The orbit-driven coregistration, and the geometry half of rung 5.2's secondary side: `rdr2geo` on the
-reference to reach the ground, `geo2rdr` on the secondary to come back. `line` and `sample` are
-zero-based, as the reference's indices are.
+The orbit-driven coregistration: `rdr2geo` on the reference to reach the ground, `geo2rdr` on the
+secondary to come back. `line` and `sample` are zero-based, as the reference's indices are, and
+`height` is a DEM as `(lon_degrees, lat_degrees) -> height`, which [`dem_sampler`](@ref) returns.
 
-**The terrain enters as an outer fixed point.** `rdr2geo` takes a constant height — all its callers in
-the geogrid supply one — so the DEM is iterated: solve at the current height, look the DEM up at the
-resulting position, solve again, stopping once the height moves by less than `tol` meters between passes
-or `iters` passes are spent. Flat terrain converges in two or three passes. Near steep local relief —
-tens of meters of height change within one range pixel — the fixed point needs several more passes to
-settle, which is what `iters` has to leave room for; at a true layover edge there is no single consistent
-ground point for `(line, sample)` to begin with, and the cap exists to bound that cost rather than to
-assert the result there is reliable.
+**The terrain is solved inside `rdr2geo`, as isce3's `Rdr2Geo` solves it.** Each candidate location is
+snapped to the DEM and the result kept on the range sphere, with isce3's damped extra iterations where
+the plain fixed point oscillates. Steep relief makes it oscillate between two heights hundreds of meters
+apart, and a solve that stops there and pairs one height with the other's location puts the ground
+point off the range sphere — by more than a hundred range samples on `S1A_IW_SLC__1SSH_20170221` IW1.
+Measured against COMPASS's own `azimuth.off`/`range.off` at 9,045 points over that pair's 27 bursts,
+the worst point differs by 5e-4 lines and 0.033 samples.
+
+**The secondary line is read from the orbit's clock.** `ImagePairGeometry.geo2rdr` carries two times
+that start at `midtime` and `orbit_midtime`, which the geogrid keeps apart deliberately: they differ by
+`0.5 nlines - (floor(nlines / 2) - 1)` lines — one for an even line count and one and a half for an odd
+one. Only the orbit time is where the satellite was, so it is the one the line index comes from; the
+other would put a subswath with an odd `lines_per_burst` (IW2 at 1515) half a line off its neighbors.
 
 **The offsets are computed from the solved time and range, not through `azimuth_index`.** Those helpers
 round to a whole line and sample for the geogrid's benefit, which is exactly the sub-pixel part a
 resampler needs.
-
-# The one line, and where it comes from
-
-**`Geo2Rdr` does not define the azimuth offset as `(t - t0) * prf - line`.** It defines it one line
-lower, so that is subtracted here. Measured against ISCE3 itself rather than inferred:
-`tools/golden/isce_offsets.py` runs `Rdr2Geo` and `Geo2Rdr` with COMPASS's own arguments and reads the
-`azimuth.off` and `range.off` the resampler consumes. Over twenty points spanning a burst of
-`S1C_IW_SLC__1SSV_20250416`:
-
-    range:   julia - isce3  mean -0.00000000   sd 8.0e-10
-    azimuth: julia - isce3  mean +0.99999904   sd 5.1e-08   before this correction
-
-So the geometry agrees with the reference implementation to eight decimal places on both axes and the
-difference is a single exact constant. It is the *resampling position* that matters to a caller — the
-input line a given output line reads from — and that is what this returns.
-
-Confirmed independently against the imagery before ISCE3 was consulted, which is what said the residual
-was real rather than a bookkeeping artifact: correlating `secondary.tif` against the *raw* secondary
-burst locates the offset COMPASS actually used, since those are the same acquisition, and a parabola
-through the peak over fifteen points gave +1.0162 +/- 0.0310 lines. The same correlation with the
-*reference* on both sides peaks at `(0, 0)` with correlation 1.000, so the mosaic mapping is exact.
 """
-function coregistration_offset(cr, cs, line::Integer, sample::Integer, height;
-                               iters::Integer = 20, tol::Real = 0.01)
+function coregistration_offset(cr, cs, line::Integer, sample::Integer, height)
     el = Ellipsoid()
-    az = cr.sensing_start + line / cr.prf
+    az = cr.sensing_start + line / cr.prf + cr.orbit_epoch_offset
     rg = cr.starting_range + sample * cr.dr
-    h = 0.0
-    llh = ImagePairGeometry.SVector{3,Float64}(0.0, 0.0, 0.0)
-    for _ in 1:iters
-        llh = ImagePairGeometry.rdr2geo(cr.orbit, el, az, rg; height = h,
-                                       wavelength = cr.wavelength, side = cr.look_side)
-        h_next = height(llh[1] / ImagePairGeometry.DEG2RAD, llh[2] / ImagePairGeometry.DEG2RAD)
-        converged = abs(h_next - h) < tol
-        h = h_next
-        converged && break
-    end
-    xyz = ImagePairGeometry.lonlat_to_xyz(el,
-              ImagePairGeometry.SVector{3,Float64}(llh[1], llh[2], h))
-    pm, vm = ImagePairGeometry.interpolate(cs.orbit, ImagePairGeometry.orbit_midtime(cs))
-    p = ImagePairGeometry.geo2rdr(cs.orbit, xyz, ImagePairGeometry.midtime(cs),
-                                 ImagePairGeometry.orbit_midtime(cs), pm, vm)
-    # The `- 1` is `Geo2Rdr`'s convention, measured against it; see above.
-    return ((p.aztime - cs.sensing_start) * cs.prf - line - 1,
-            (p.range - cs.starting_range) / cs.dr - sample, h)
+    # `rdr2geo` hands a height source radians; `height` takes degrees.
+    dem = (lon, lat) -> height(lon / ImagePairGeometry.DEG2RAD, lat / ImagePairGeometry.DEG2RAD)
+    llh = ImagePairGeometry.rdr2geo(cr.orbit, el, az, rg; height = dem, wavelength = cr.wavelength,
+                                    side = cr.look_side)
+    xyz = ImagePairGeometry.lonlat_to_xyz(el, llh)
+    t0 = ImagePairGeometry.orbit_midtime(cs)
+    pm, vm = ImagePairGeometry.interpolate(cs.orbit, t0)
+    p = ImagePairGeometry.geo2rdr(cs.orbit, xyz, t0, t0, pm, vm)
+    return ((p.orbittime - cs.orbit_epoch_offset - cs.sensing_start) * cs.prf - line,
+            (p.range - cs.starting_range) / cs.dr - sample, llh[3])
 end
 
 # ---------------------------------------------------------------------------
