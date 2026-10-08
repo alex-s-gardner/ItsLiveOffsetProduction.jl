@@ -76,8 +76,10 @@ function TileCache(parent::AbstractMatrix; tile::Integer = 512,
     nt = AutoRIFT._tile_grid(dims, tile)
     nbytes = prod(nt) * tile * tile * sizeof(Float32)
     mkpath(dir)
-    path = joinpath(dir, "tilecache_$(dims[1])x$(dims[2])_$(tile).bin")
-    io = open(path, "w+")
+    # A file of its own, created atomically. Both images of a pair are cached in one directory and are
+    # usually the same size, so a name derived from the dimensions would give them one file, and each
+    # would read back the other's tiles.
+    path, io = mktemp(dir; cleanup = false)
     truncate(io, nbytes)
     mapped = Mmap.mmap(io, Vector{UInt8}, nbytes)
     return TileCache(parent, Int(tile), dims, nt, io, path, mapped,

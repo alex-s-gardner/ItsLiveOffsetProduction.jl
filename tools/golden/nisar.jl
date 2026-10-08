@@ -12,6 +12,7 @@
 # `grid` is deliberately not imported: the harness uses that name for the parameter grid, and
 # `GeocodedProduct` carries its own as a field.
 using SLCDatasets: NisarRaster, Amplitude, open_geocoded
+import HDF5
 
 # Reading one of these costs I/O, so a blocked run windows its reads and an unblocked one is refused
 # rather than resolving a pixel at a time.
@@ -107,21 +108,64 @@ function gslc_window(fp, path::AbstractString)
 end
 
 """
+    DopplerCentroid(path)
+
+An RSLC's Doppler centroid, as `(time, range) -> Hz`: the product's own LUT
+(`metadata/processingInformation/parameters/frequencyA/dopplerCentroid`), bilinear between its nodes and
+clamped at its edges. `time` is seconds on the swath's `zeroDopplerTime` clock and `range` slant range in
+meters.
+"""
+struct DopplerCentroid
+    time::Vector{Float64}
+    range::Vector{Float64}
+    # `lut[i, j]` is at `range[i]`, `time[j]`: HDF5's row-major `(time, range)` read column-major.
+    lut::Matrix{Float64}
+end
+
+function DopplerCentroid(path::AbstractString)
+    return HDF5.h5open(path) do f
+        pp = "science/LSAR/RSLC/metadata/processingInformation/parameters"
+        t = read(f["$pp/frequencyA/zeroDopplerTime"])
+        r = read(f["$pp/frequencyA/slantRange"])
+        lut = read(f["$pp/frequencyA/dopplerCentroid"])
+        size(lut) == (length(r), length(t)) || error(
+            "$(basename(path)): the Doppler LUT is $(size(lut)) over $(length(r)) ranges and " *
+            "$(length(t)) times")
+        DopplerCentroid(Float64.(t), Float64.(r), Float64.(lut))
+    end
+end
+
+function (d::DopplerCentroid)(time::Real, range::Real)
+    _node(ax, v) = (k = clamp(searchsortedlast(ax, v), 1, length(ax) - 1);
+                    (k, clamp((v - ax[k]) / (ax[k + 1] - ax[k]), 0.0, 1.0)))
+    i, u = _node(d.range, range)
+    j, w = _node(d.time, time)
+    A = d.lut
+    return (1 - u) * (1 - w) * A[i, j] + u * (1 - w) * A[i + 1, j] +
+           (1 - u) * w * A[i, j + 1] + u * w * A[i + 1, j + 1]
+end
+
+"""
     ResampledRSLC(reference, secondary, dem) <: AbstractMatrix{Float32}
 
 The secondary RSLC's amplitude on the reference's radar grid, resampled a window at a time.
 
-**An RSLC is not TOPS, and that is the whole of what makes this simpler than the Sentinel-1 path**: one
-continuous swath rather than bursts, so there is no seam arithmetic, no per-burst carrier and no
-deramp-and-reramp — the azimuth ramp a TOPS burst carries exists because its antenna sweeps, and this
-antenna does not. What is left is the part both share: an offset field from `rdr2geo` on the reference and
-`geo2rdr` on the secondary, and an eight-tap sinc through it.
+**An RSLC is not TOPS**: one continuous swath rather than bursts, so there is no seam arithmetic and no
+burst carrier. What is left is an offset field from `rdr2geo` on the reference and `geo2rdr` on the
+secondary, and an eight-tap sinc through it.
+
+**The azimuth spectrum is not at baseband, so it is demodulated first.** A NISAR RSLC is focused to zero
+Doppler but keeps its Doppler centroid: 968 Hz on P094 against a 1520 Hz line rate, which aliases to
+-552 Hz with 1261 Hz of processed bandwidth around it. The eight-tap kernel is accurate only near zero
+frequency, so interpolating that signal as it is distorts the result: measured against ISCE3's own
+`coregistered_secondary.slc` on P094, the amplitude correlates at 0.83 and sits 0.21 lines off it, against
+1.00000 and 0.0000 lines with the demodulation. Each source column is multiplied by
+`exp(-2πi f_dc t)` at its own slant range before interpolating, which is what `ResampSlc` does with the
+Doppler LUT it is handed; the remodulation it applies afterwards is a unit phasor and cannot change an
+amplitude, so it is omitted.
 
 The offset field is [`_offset_lattice`](@ref)'s, a node every 64 lines and 512 samples with bilinear
 interpolation between — 90,400 nodes over a 57760 x 50511 grid against 2.9 billion per-pixel solves.
-Resampling the reference against *itself* through it returns the reference to a correlation of 0.999997
-and a mean ratio of 1.000007, which is what says the field and the kernel are right rather than merely
-plausible.
 
 Lazy for the reason the Sentinel-1 mosaic is: a materialized `Float32` copy of this grid is 11.7 GB and
 the correlator only ever wants a block.
@@ -130,6 +174,13 @@ struct ResampledRSLC{S,DL,DS} <: AbstractMatrix{Float32}
     source::S
     dl::DL
     ds::DS
+    doppler::DopplerCentroid
+    # The secondary's own first-line time, line spacing, near range and range spacing, on the clocks
+    # `doppler` is indexed by.
+    t0::Float64
+    dt::Float64
+    r0::Float64
+    dr::Float64
     dims::Tuple{Int,Int}
     extent::Tuple{Int,Int}
     read::Base.RefValue{Int}
@@ -139,9 +190,13 @@ function ResampledRSLC(reference::AbstractString, secondary::AbstractString, dem
     rs = open_slc(reference)
     ss = open_slc(secondary)
     src = pixels(ss)
+    eltype(src) <: Complex || error("$(basename(secondary)): the resampler interpolates complex " *
+                                    "samples, and this raster holds $(eltype(src))")
     dims = (nlines(rs), nsamples(rs))
-    dl, ds = _offset_lattice(RadarCoordinate(rs), RadarCoordinate(ss), dem, dims[1], dims[2])
-    return ResampledRSLC(src, dl, ds, dims, size(src), Ref(0))
+    cs = RadarCoordinate(ss)
+    dl, ds = _offset_lattice(RadarCoordinate(rs), cs, dem, dims[1], dims[2])
+    return ResampledRSLC(src, dl, ds, DopplerCentroid(secondary), cs.sensing_start, 1 / cs.prf,
+                         cs.starting_range, cs.dr, dims, size(src), Ref(0))
 end
 
 Base.size(r::ResampledRSLC) = r.dims
@@ -161,10 +216,25 @@ function Base.getindex(r::ResampledRSLC, rows::AbstractUnitRange, cols::Abstract
     (isempty(brows) || isempty(bcols)) && return zeros(Float32, length(rows), length(cols))
     src = r.source[brows, bcols]
     r.read[] += length(brows) * length(bcols)
+    _demodulate!(src, r, brows, bcols)
     # No `doppler`: that rejection reproduces `ResampSlc`'s own LUT test, which is a property of the
     # Sentinel-1 burst grid rather than of an interpolation.
     return resample_burst(src, r.dl, r.ds, lines, samples;
                           origin = (first(brows) - 1, first(bcols) - 1), extent = r.extent)
+end
+
+# `src` holds source lines `brows` and samples `bcols`; each column is brought to baseband at its own
+# slant range. The phase is taken from the absolute line index, so two windows agree where they overlap,
+# and the centroid at the band's middle line, since it moves by under 2% of the line rate over a scene.
+function _demodulate!(src::AbstractMatrix{<:Complex}, r::ResampledRSLC, brows, bcols)
+    tmid = r.t0 + (first(brows) + last(brows) - 2) / 2 * r.dt
+    Threads.@threads for j in eachindex(bcols)
+        cycles = r.doppler(tmid, r.r0 + (bcols[j] - 1) * r.dr) * r.dt
+        for (i, n) in pairs(brows)
+            src[i, j] *= cis(-2pi * rem((n - 1) * cycles, 1.0))
+        end
+    end
+    return src
 end
 
 Base.getindex(r::ResampledRSLC, i::Integer, j::Integer) = r[i:i, j:j][1, 1]

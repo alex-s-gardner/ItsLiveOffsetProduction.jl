@@ -457,14 +457,24 @@ function swath_amplitude(p::Sentinel1Product, swath::Integer)
     nlines = 1 + round(Int, (seconds_between(first(a.burst_start), last(a.burst_start)) +
                              (lpb - 1) * dt) / dt)
     out = zeros(Float32, nlines, spb)
-    for i in 1:n
-        # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
-        prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
-        nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
-        bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
-        mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
-        cols = (fvs[i] + 1):lvs[i]          # `slice(first_valid_sample, last_valid_sample)`
-        out[(mstart + 1):mend, cols] = amp(i, (bstart + 1):bend, cols)
+    # A task per burst. `amp` reads a disjoint window of the shared `StripedTiff`, which allocates its
+    # own gather buffer per call rather than sharing one — the same property `deramped_burst` relies on
+    # to deramp several column slabs at once — so the reads below are concurrent-safe. Computed in
+    # parallel and assigned into `out` serially, so the overlap-splitting arithmetic never has to be
+    # proven data-race-free on top of being correct.
+    pieces = fetch.(map(1:n) do i
+        Threads.@spawn begin
+            # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
+            prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
+            nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
+            bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
+            mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
+            cols = (fvs[i] + 1):lvs[i]      # `slice(first_valid_sample, last_valid_sample)`
+            (mstart, mend, cols, amp(i, (bstart + 1):bend, cols))
+        end
+    end)
+    for (mstart, mend, cols, pix) in pieces
+        out[(mstart + 1):mend, cols] = pix
     end
     return (out, nlines, spb)
 end
@@ -811,64 +821,47 @@ function dem_sampler(path::AbstractString)
 end
 
 """
-    coregistration_offset(cr, cs, line, sample, height; iters = 4) -> (dline, dsample, h)
+    coregistration_offset(cr, cs, line, sample, height) -> (dline, dsample, h)
 
 Where the secondary images the ground point the reference images at `(line, sample)`, as an offset in
-the reference's own pixels.
+the reference's own pixels, and the terrain height there.
 
-The orbit-driven coregistration, and the geometry half of rung 5.2's secondary side: `rdr2geo` on the
-reference to reach the ground, `geo2rdr` on the secondary to come back. `line` and `sample` are
-zero-based, as the reference's indices are.
+The orbit-driven coregistration: `rdr2geo` on the reference to reach the ground, `geo2rdr` on the
+secondary to come back. `line` and `sample` are zero-based, as the reference's indices are, and
+`height` is a DEM as `(lon_degrees, lat_degrees) -> height`, which [`dem_sampler`](@ref) returns.
 
-**The terrain enters as an outer fixed point.** `rdr2geo` takes a constant height — all its callers in
-the geogrid supply one — so the DEM is iterated: solve at the current height, look the DEM up at the
-resulting position, solve again. Four passes, which is past convergence for Sentinel-1 geometry.
+**The terrain is solved inside `rdr2geo`, as isce3's `Rdr2Geo` solves it.** Each candidate location is
+snapped to the DEM and the result kept on the range sphere, with isce3's damped extra iterations where
+the plain fixed point oscillates. Steep relief makes it oscillate between two heights hundreds of meters
+apart, and a solve that stops there and pairs one height with the other's location puts the ground
+point off the range sphere — by more than a hundred range samples on `S1A_IW_SLC__1SSH_20170221` IW1.
+Measured against COMPASS's own `azimuth.off`/`range.off` at 9,045 points over that pair's 27 bursts,
+the worst point differs by 5e-4 lines and 0.033 samples.
+
+**The secondary line is read from the orbit's clock.** `ImagePairGeometry.geo2rdr` carries two times
+that start at `midtime` and `orbit_midtime`, which the geogrid keeps apart deliberately: they differ by
+`0.5 nlines - (floor(nlines / 2) - 1)` lines — one for an even line count and one and a half for an odd
+one. Only the orbit time is where the satellite was, so it is the one the line index comes from; the
+other would put a subswath with an odd `lines_per_burst` (IW2 at 1515) half a line off its neighbors.
 
 **The offsets are computed from the solved time and range, not through `azimuth_index`.** Those helpers
 round to a whole line and sample for the geogrid's benefit, which is exactly the sub-pixel part a
 resampler needs.
-
-# The one line, and where it comes from
-
-**`Geo2Rdr` does not define the azimuth offset as `(t - t0) * prf - line`.** It defines it one line
-lower, so that is subtracted here. Measured against ISCE3 itself rather than inferred:
-`tools/golden/isce_offsets.py` runs `Rdr2Geo` and `Geo2Rdr` with COMPASS's own arguments and reads the
-`azimuth.off` and `range.off` the resampler consumes. Over twenty points spanning a burst of
-`S1C_IW_SLC__1SSV_20250416`:
-
-    range:   julia - isce3  mean -0.00000000   sd 8.0e-10
-    azimuth: julia - isce3  mean +0.99999904   sd 5.1e-08   before this correction
-
-So the geometry agrees with the reference implementation to eight decimal places on both axes and the
-difference is a single exact constant. It is the *resampling position* that matters to a caller — the
-input line a given output line reads from — and that is what this returns.
-
-Confirmed independently against the imagery before ISCE3 was consulted, which is what said the residual
-was real rather than a bookkeeping artifact: correlating `secondary.tif` against the *raw* secondary
-burst locates the offset COMPASS actually used, since those are the same acquisition, and a parabola
-through the peak over fifteen points gave +1.0162 +/- 0.0310 lines. The same correlation with the
-*reference* on both sides peaks at `(0, 0)` with correlation 1.000, so the mosaic mapping is exact.
 """
-function coregistration_offset(cr, cs, line::Integer, sample::Integer, height;
-                               iters::Integer = 4)
+function coregistration_offset(cr, cs, line::Integer, sample::Integer, height)
     el = Ellipsoid()
-    az = cr.sensing_start + line / cr.prf
+    az = cr.sensing_start + line / cr.prf + cr.orbit_epoch_offset
     rg = cr.starting_range + sample * cr.dr
-    h = 0.0
-    llh = ImagePairGeometry.SVector{3,Float64}(0.0, 0.0, 0.0)
-    for _ in 1:iters
-        llh = ImagePairGeometry.rdr2geo(cr.orbit, el, az, rg; height = h,
-                                       wavelength = cr.wavelength, side = cr.look_side)
-        h = height(llh[1] / ImagePairGeometry.DEG2RAD, llh[2] / ImagePairGeometry.DEG2RAD)
-    end
-    xyz = ImagePairGeometry.lonlat_to_xyz(el,
-              ImagePairGeometry.SVector{3,Float64}(llh[1], llh[2], h))
-    pm, vm = ImagePairGeometry.interpolate(cs.orbit, ImagePairGeometry.orbit_midtime(cs))
-    p = ImagePairGeometry.geo2rdr(cs.orbit, xyz, ImagePairGeometry.midtime(cs),
-                                 ImagePairGeometry.orbit_midtime(cs), pm, vm)
-    # The `- 1` is `Geo2Rdr`'s convention, measured against it; see above.
-    return ((p.aztime - cs.sensing_start) * cs.prf - line - 1,
-            (p.range - cs.starting_range) / cs.dr - sample, h)
+    # `rdr2geo` hands a height source radians; `height` takes degrees.
+    dem = (lon, lat) -> height(lon / ImagePairGeometry.DEG2RAD, lat / ImagePairGeometry.DEG2RAD)
+    llh = ImagePairGeometry.rdr2geo(cr.orbit, el, az, rg; height = dem, wavelength = cr.wavelength,
+                                    side = cr.look_side)
+    xyz = ImagePairGeometry.lonlat_to_xyz(el, llh)
+    t0 = ImagePairGeometry.orbit_midtime(cs)
+    pm, vm = ImagePairGeometry.interpolate(cs.orbit, t0)
+    p = ImagePairGeometry.geo2rdr(cs.orbit, xyz, t0, t0, pm, vm)
+    return ((p.orbittime - cs.orbit_epoch_offset - cs.sensing_start) * cs.prf - line,
+            (p.range - cs.starting_range) / cs.dr - sample, llh[3])
 end
 
 # ---------------------------------------------------------------------------
@@ -1040,7 +1033,12 @@ end
 # The values themselves are pixel indices of order 1e3 to 1e5, so nothing here approaches `Int`'s range.
 @inline _ifloor(x::Float64) = unsafe_trunc(Int, floor(x))
 
-@inline _tap_bin(f::Float64) = round(Int, f * SINC_SUBDIVISIONS) + 1
+# Same fix as `_ifloor`, for the same reason: `round(Int, x)` is `trunc(Int, round(x))` with a range
+# and `isinf`/`isnan` check on the way to `Int`, and `f ∈ [0, 1]` makes `f * SINC_SUBDIVISIONS` finite
+# and within `[0, SINC_SUBDIVISIONS]` by construction — nowhere near `Int`'s range, so the guard this
+# skips can never fire. `round(x)` alone (no target type) stays checked-free; only the `Int` conversion
+# after it was the cost.
+@inline _tap_bin(f::Float64) = unsafe_trunc(Int, round(f * SINC_SUBDIVISIONS)) + 1
 @inline sinc8_taps_at(k::Int) = ntuple(m -> @inbounds(SINC_TAPS[m, k]), 8)
 @inline sinc8_taps(f::Float64) = sinc8_taps_at(_tap_bin(f))
 
@@ -1060,10 +1058,20 @@ the same phase it does inside the whole burst, so reading one must not restart t
 """
 function deramped_burst(raster, rows::AbstractUnitRange, carrier;
                         cols::AbstractUnitRange = axes(raster, 2),
-                        origin::Tuple{Integer,Integer} = (0, 0))
+                        origin::Tuple{Integer,Integer} = (0, 0),
+                        scratch::Union{Matrix{ComplexF32},Nothing} = nothing)
     nr, nc = length(rows), length(cols)
     l0, s0 = Int(origin[1]), Int(origin[2])
-    out = Matrix{ComplexF32}(undef, nr, nc)
+    # `scratch` is sized to a burst's full extent, the fixed upper bound every band's `(nr, nc)` is
+    # clamped to, so the view below never reaches past it — see `secondary_swath_amplitude`, which
+    # allocates one such buffer and reuses it across every burst of a subswath rather than paying a
+    # fresh `undef` allocation per burst.
+    #
+    # Always a view, even with no `scratch`: both branches then return the same concrete `SubArray`
+    # type, where a `Matrix`-or-`SubArray` union would force a dynamic dispatch at every caller that
+    # goes on to index it — and `resample_burst`'s per-pixel loop is exactly such a caller.
+    buf = scratch === nothing ? Matrix{ComplexF32}(undef, nr, nc) : scratch
+    out = view(buf, 1:nr, 1:nc)
     # The carrier's range half is hoisted out of each column by `carrier_column`, leaving a degree-5
     # Horner sweep per pixel — see there for what the loop it replaces cost.
     #
@@ -1138,6 +1146,10 @@ unit phasor and cannot change a magnitude.
 `origin` is the burst-local zero-based `(line, sample)` of `deramped[1, 1]` and `extent` is the burst's
 own size, so `deramped` may be a band of the burst rather than all of it.
 
+`dest`, when given, is written in place and returned instead of a fresh array — a zeroed view into a
+caller's own mosaic, so the per-burst result lands there directly rather than being copied in after the
+fact.
+
 **The rejection is against `extent` and the read is against the band**, and the two have to be separate
 for a windowed result to equal a whole-burst one. A pixel whose eight-tap support leaves the *burst* is
 rejected by both, and must be: the reference's resampler has no samples there either. A pixel whose
@@ -1148,8 +1160,31 @@ mosaic — so it throws.
 function resample_burst(deramped, dl, ds, lines::AbstractUnitRange,
                         samples::AbstractUnitRange, valid = nothing; doppler = nothing,
                         origin::Tuple{Integer,Integer} = (0, 0),
-                        extent::Tuple{Integer,Integer} = size(deramped))
-    out = zeros(Float32, length(lines), length(samples))
+                        extent::Tuple{Integer,Integer} = size(deramped),
+                        dest::Union{AbstractMatrix{Float32},Nothing} = nothing)
+    # `dest`, when given, must already be zero: a pixel outside the eight-tap support or the valid
+    # region is skipped below rather than written, and a skipped pixel's zero is this function's own
+    # output there, not a leftover the caller promised to clear.
+    #
+    # **The buffer is chosen here, outside the threaded kernel, deliberately.** `out` assigned from an
+    # `if`/`else` and then captured by `Threads.@threads`'s inner closure forces Julia to box it —
+    # every one of the kernel's `out[ii, jj] = ...` writes then goes through that box — which measured
+    # 2x slower and 2x more allocation than allocating `out` fresh every call. A function barrier avoids
+    # it: `out` arrives at `_resample_burst!` as a plain argument, never reassigned, so each call
+    # specializes on its own concrete type with no box.
+    if dest === nothing
+        out = zeros(Float32, length(lines), length(samples))
+    else
+        size(dest) == (length(lines), length(samples)) || throw(DimensionMismatch(
+            "dest is $(size(dest)) but lines x samples is $((length(lines), length(samples)))"))
+        out = dest
+    end
+    return _resample_burst!(out, deramped, dl, ds, lines, samples, valid; doppler, origin, extent)
+end
+
+function _resample_burst!(out::AbstractMatrix{Float32}, deramped, dl, ds, lines::AbstractUnitRange,
+                          samples::AbstractUnitRange, valid; doppler, origin::Tuple{Integer,Integer},
+                          extent::Tuple{Integer,Integer})
     oy, ox = Int(origin[1]), Int(origin[2])
     ey, ex = Int(extent[1]), Int(extent[2])
     ny, nx = size(deramped)
@@ -1261,8 +1296,18 @@ function secondary_swath_amplitude(rp::Sentinel1Product, sp::Sentinel1Product, s
                                    offsets = nothing, grid = nothing)
     r = ResampledSwath(rp, sp, swath, dem; offsets, grid)
     out = zeros(Float32, size(r))
+    # One scratch buffer for the whole subswath rather than one `undef` allocation per burst: every
+    # burst of a subswath shares the same `extent` (the reference's lines/samples per burst), which is
+    # an upper bound on the band `deramped_burst` ever asks for.
+    lpb, spb = first(r.places).extent
+    scratch = Matrix{ComplexF32}(undef, lpb, spb)
+    # One burst at a time, deliberately: `deramped_burst` already runs `Threads.@threads` over every
+    # available thread to deramp a single burst, so spawning a task per burst here would only nest one
+    # saturated parallel region inside another — measured on an 8-burst subswath, that materialization
+    # loop costs the same wall time threaded as serial, 3.0 s either way, because there is no spare
+    # thread for the outer task to use.
     for p in r.places
-        out[p.mosaic_rows, p.mosaic_cols] = _resample_piece(r, p, p.lines, p.samples)
+        _resample_piece(r, p, p.lines, p.samples, view(out, p.mosaic_rows, p.mosaic_cols); scratch)
     end
     return (out, size(r, 1), size(r, 2))
 end
@@ -1476,13 +1521,18 @@ function _support_bounds_exhaustive(dl, ds, lines::AbstractUnitRange, samples::A
     return (ymin, ymax, xmin, xmax)
 end
 
-# One burst's contribution to a window, over the burst-local output indices `lines` x `samples`.
+# One burst's contribution to a window, over the burst-local output indices `lines` x `samples`,
+# written into `dest` and returned.
 #
 # The band read from the source is the support those outputs reach, clamped to the burst: a pixel whose
 # support leaves the burst is rejected by `resample_burst` and never read, so clamping cannot change an
 # answer.
+#
+# `scratch`, when given, replaces `deramped_burst`'s own `undef` allocation — see there — and must be
+# at least `p.extent` in each dimension, which every burst of one subswath shares as its upper bound.
 function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUnitRange,
-                         samples::AbstractUnitRange)
+                         samples::AbstractUnitRange, dest::AbstractMatrix{Float32};
+                         scratch::Union{AbstractMatrix{ComplexF32},Nothing} = nothing)
     lpb, spb = p.extent
     ymin, ymax, xmin, xmax = _support_bounds(p.dl, p.ds, lines, samples)
     brows = clamp(floor(Int, ymin) - 3, 1, lpb):clamp(ceil(Int, ymax) + 4, 1, lpb)
@@ -1491,7 +1541,7 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
 
     srows = (first(p.source_rows) - 1 + first(brows)):(first(p.source_rows) - 1 + last(brows))
     r.deramped[] += length(brows) * length(bcols)
-    deramped = deramped_burst(r.source, srows, p.carrier; cols = bcols, origin)
+    deramped = deramped_burst(r.source, srows, p.carrier; cols = bcols, origin, scratch)
     # **The resampler's source is the burst zeroed outside its own valid window, not the raw burst.**
     # `slc_to_vrt_file` writes a VRT of the burst's full shape whose `SimpleSource` covers only
     # `first_valid_line:last_valid_line` by `first_valid_sample:last_valid_sample`, with
@@ -1510,12 +1560,14 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
     # annotation's valid region. Guarding on the valid window declines 137,782 pixels `secondary.tif`
     # fills, to avoid filling 2,746 it does not — fifty times the error it removes.
     return resample_burst(deramped, p.dl, p.ds, lines, samples; doppler = p.extent, origin,
-                          extent = p.extent)
+                          extent = p.extent, dest)
 end
 
 function Base.getindex(r::ResampledSwath, rows::AbstractUnitRange, cols::AbstractUnitRange)
     checkbounds(r, rows, cols)
     out = zeros(Float32, length(rows), length(cols))
+    lpb, spb = first(r.places).extent
+    scratch = Matrix{ComplexF32}(undef, lpb, spb)
     for p in r.places
         mr = intersect(rows, p.mosaic_rows)
         isempty(mr) && continue
@@ -1526,9 +1578,9 @@ function Base.getindex(r::ResampledSwath, rows::AbstractUnitRange, cols::Abstrac
         u0 = first(mc) - first(p.mosaic_cols)
         lines = (first(p.lines) + t0):(first(p.lines) + t0 + length(mr) - 1)
         samples = (first(p.samples) + u0):(first(p.samples) + u0 + length(mc) - 1)
-        out[(first(mr) - first(rows) + 1):(last(mr) - first(rows) + 1),
-            (first(mc) - first(cols) + 1):(last(mc) - first(cols) + 1)] =
-            _resample_piece(r, p, lines, samples)
+        dest = view(out, (first(mr) - first(rows) + 1):(last(mr) - first(rows) + 1),
+                    (first(mc) - first(cols) + 1):(last(mc) - first(cols) + 1))
+        _resample_piece(r, p, lines, samples, dest; scratch)
     end
     return out
 end
