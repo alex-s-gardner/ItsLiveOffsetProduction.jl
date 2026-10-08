@@ -153,8 +153,7 @@ end
 
 The overlap out of one scene, read concurrently into `dest`, in `(row, col)`.
 
-`OpticalDatasets.read_window!` reads chunk-aligned slabs from several tasks at once and converts each as
-it lands, where `_cropped_scene` reads the **whole band** in one blocking request and then copies it
+`OpticalDatasets.read_window!` reads the window's tiles concurrently and converts each as it lands, where `_cropped_scene` reads the **whole band** in one blocking request and then copies it
 twice. On a 338 MiB Landsat band over `/vsis3` that is 32.3 s against 54.9 s, and it writes one array
 rather than allocating four.
 
@@ -166,14 +165,10 @@ function _scene_window!(dest::AbstractMatrix, path::AbstractString, off::NTuple{
     nr, nc = want
     ox, oy = off
     r = OpticalDatasets.open_optical(path)
-    try
-        size(r, 1) >= oy + nr && size(r, 2) >= ox + nc || throw(DimensionMismatch(
-            "the overlap at offset $off does not fit in a $(size(r)) scene; the crop and the " *
-            "geotransform disagree"))
-        return OpticalDatasets.read_window!(dest, r, (oy + 1):(oy + nr), (ox + 1):(ox + nc))
-    finally
-        close(r)
-    end
+    size(r, 1) >= oy + nr && size(r, 2) >= ox + nc || throw(DimensionMismatch(
+        "the overlap at offset $off does not fit in a $(size(r)) scene; the crop and the " *
+        "geotransform disagree"))
+    return OpticalDatasets.read_window!(dest, r, (oy + 1):(oy + nr), (ox + 1):(ox + nc))
 end
 
 # A point outside the image is declined before any scene is read.
