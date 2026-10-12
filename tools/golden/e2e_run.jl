@@ -103,7 +103,8 @@ end
 """
     gslc_run(c::GoldenCase) -> Union{Nothing,String}
 
-The cached run holding both of `c`'s GSLC granules, or `nothing`.
+The cached run holding both of `c`'s GSLC granules, or `nothing`. With [`NISAR_REMOTE`](@ref) set the
+granules are read from ASF instead, so any cached run of `c` will do.
 
 **Not necessarily the run the ladder compares against.** `resolve_run` prefers a run with a capture, and
 the granules live wherever the driver downloaded them — 10.3 GiB each, so they are not copied per run.
@@ -111,7 +112,8 @@ the granules live wherever the driver downloaded them — 10.3 GiB each, so they
 function gslc_run(c::GoldenCase)
     root = runs_dir(c)
     isdir(root) || return nothing
-    want = [n * ".h5" for n in (first(c.reference), first(c.secondary))]
+    # Read from ASF, the granules need no cached run; the window's `*_adjusted.tif` is `setup`'s.
+    want = NISAR_REMOTE[] ? String[] : [n * ".h5" for n in (first(c.reference), first(c.secondary))]
     for d in sort(readdir(root; join = true); rev = true)
         isdir(d) && all(f -> isfile(joinpath(d, f)), want) && return d
     end
@@ -146,12 +148,15 @@ end
 """
     rslc_run(c::GoldenCase) -> Union{Nothing,String}
 
-The cached run holding both of `c`'s RSLC granules and the DEM the resample reads, or `nothing`.
+The cached run holding both of `c`'s RSLC granules and the DEM the resample reads, or `nothing`. With
+[`NISAR_REMOTE`](@ref) set the granules are read from ASF instead, so only the DEM is required.
 """
 function rslc_run(c::GoldenCase)
     root = runs_dir(c)
     isdir(root) || return nothing
-    want = [[n * ".h5" for n in (first(c.reference), first(c.secondary))]; "dem.tif"]
+    # Read from ASF, the granules are not needed here; the DEM the driver downloaded still is.
+    granules = NISAR_REMOTE[] ? String[] : [n * ".h5" for n in (first(c.reference), first(c.secondary))]
+    want = [granules; "dem.tif"]
     for d in sort(readdir(root; join = true); rev = true)
         isdir(d) && all(f -> isfile(joinpath(d, f)), want) && return d
     end
@@ -169,13 +174,15 @@ missing instead of erroring somewhere inside a stage.
 function unsupported(c::GoldenCase)
     if c.platform == "NISAR-L1"
         run = rslc_run(c)
-        isnothing(run) && return "no cached run holds both RSLC granules and a DEM; the pair is read \
-                                  from the products themselves"
+        isnothing(run) && return (NISAR_REMOTE[] ? "no cached run holds the DEM the resample reads" :
+                                  "no cached run holds both RSLC granules and a DEM; the pair is read \
+                                   from the products themselves")
     end
     if c.platform == "NISAR-L2"
         isnothing(gslc_run(c)) &&
-            return "no cached run holds both GSLC granules; a geocoded pair is read from the products \
-                    themselves rather than from the driver's cropped copies"
+            return (NISAR_REMOTE[] ? "no cached run of this pair, which holds the driver's crop window" :
+                    "no cached run holds both GSLC granules; a geocoded pair is read from the products \
+                     themselves rather than from the driver's cropped copies")
     end
     if c.platform == "S1-SLC"
         isnothing(s1_orbit_dir(c)) &&
@@ -217,6 +224,17 @@ function native_scene(path::AbstractString, name::AbstractString, c::GoldenCase)
     gt = ArchGDAL.getgeotransform(ds)
     along, cross = orbit_scan_angles(scene_ang(name, joinpath(CACHE, "angcache")), scene_epsg(ds);
                                      spacing = (gt[2], gt[6]))
+    return fft_native_filter(img, along, cross)
+end
+
+"""
+    fft_native_filter(img, along, cross) -> Matrix{Float32}
+
+`process.py`'s `:fft` native filter of a whole scene: Wallis at width 5, then the `Destripe` band-reject
+oriented by the scan's `along`/`cross` angles, with the pixels reading zero kept at zero through both.
+"""
+function fft_native_filter(img::AbstractMatrix{Float32}, along, cross)
+    valid = img .!= 0
     w, _ = AutoRIFT.preprocess(img, valid, AutoRIFT.Wallis(5, 0.0))
     w[.!valid] .= 0.0f0
     d, _ = AutoRIFT.preprocess(w, valid, AutoRIFT.Destripe(; along_track = along, cross_track = cross))
@@ -297,15 +315,16 @@ function _s1_burst_offsets(run::AbstractString, sw::Integer; secondary::Bool = f
 end
 
 """
-    e2e_imagery(s::Setup) -> (reference, secondary)
+    e2e_imagery(s::Setup; lazy = false) -> (reference, secondary)
 
 The correlator's two images, built from the granule, in acquisition order.
 
 A radar burst pair returns the reference acquisition's mosaic and a [`ResampledMosaic`](@ref) — lazy, so
 the secondary is resampled a block at a time by the correlator rather than materialized or written to
-disk. An optical pair returns the two overlaps.
+disk. With `lazy` the Sentinel-1 reference mosaic is windowed too ([`lazy_radar_mosaic`](@ref)) rather
+than assembled whole. An optical pair returns the two overlaps.
 """
-function e2e_imagery(s::Setup)
+function e2e_imagery(s::Setup; lazy::Bool = false)
     c = s.case
     if c.platform == "NISAR-L2"
         # **Geocoded, so there is nothing to coregister**: `nisar_isce3.process_gslc` crops both products
@@ -316,10 +335,9 @@ function e2e_imagery(s::Setup)
         # The *window* comes from the driver's `*_adjusted.tif` geotransform, six numbers naming where
         # its crop began; every sample comes from the granule. Deriving the window instead means
         # reproducing `crop_gslcs`' own intersection rule, which no rung checks yet.
-        run = gslc_run(c)
         pair = map((:reference, :secondary)) do which
             name = which === :reference ? first(acquisition_order(c)) : last(acquisition_order(c))
-            h5 = joinpath(run, name * ".h5")
+            h5 = nisar_granule(c, name)
             fp = gslc_footprint(h5)
             crop = which === :reference ? s.reference_path : s.secondary_path
             r0, c0 = gslc_window(fp, crop)
@@ -336,9 +354,9 @@ function e2e_imagery(s::Setup)
         # amplitude is the granule's own samples. The secondary is resampled onto it.
         run = rslc_run(c)
         early, late = acquisition_order(c)
-        ref = SLCDatasets.amplitude(open_slc(joinpath(run, early * ".h5")))
-        sec = ResampledRSLC(joinpath(run, early * ".h5"), joinpath(run, late * ".h5"),
-                            dem_sampler(joinpath(run, "dem.tif")))
+        rp, sp = nisar_granule(c, early), nisar_granule(c, late)
+        ref = SLCDatasets.amplitude(nisar_slc(rp))
+        sec = ResampledRSLC(rp, sp, dem_sampler(joinpath(run, "dem.tif")))
         size(ref) == size(sec) || error("the reference grid is $(size(ref)) and the resampled " *
                                         "secondary $(size(sec)); they are not the same grid")
         return (ref, sec)
@@ -372,7 +390,7 @@ function e2e_imagery(s::Setup)
         # not the same claim as the geogrid depending on it. Replaying is only needed, and only
         # possible, when `cslc_grid` itself is not `nothing`.
         if cslc_grid(s.run, sws) === nothing
-            ref = radar_mosaic(rp, sws)
+            ref = (lazy ? lazy_radar_mosaic : radar_mosaic)(rp, sws)
             sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem))
         else
             # `_s1_burst_offsets`, not `_reference_offsets`/`_secondary_offsets`: this run's `product/`
@@ -386,7 +404,7 @@ function e2e_imagery(s::Setup)
             refgrid = _reference_grid(s.run, sws)
             refoff = sw -> _s1_burst_offsets(s.run, sw)
             secoff = sw -> _s1_burst_offsets(s.run, sw; secondary = true)
-            ref = radar_mosaic(rp, sws; offsets = refoff, grid = refgrid)
+            ref = (lazy ? lazy_radar_mosaic : radar_mosaic)(rp, sws; offsets = refoff, grid = refgrid)
             sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem); offsets = secoff, grid = refgrid)
         end
         size(ref) == size(sec) || error("the reference mosaic is $(size(ref)) and the resampled " *
@@ -403,6 +421,11 @@ function e2e_imagery(s::Setup)
         dem = joinpath(s.run, "dem.tif")
         isfile(dem) || error("no dem.tif in $(s.run); the secondary's resample solves for terrain " *
                             "height, so the pair cannot be coregistered without one")
+        # The lattice route, as for a full-SLC pair: the reference's own bursts, the secondary resampled
+        # onto them through `_offset_lattice`.
+        if FORCE_LATTICE[]
+            return ((lazy ? lazy_radar_mosaic : radar_mosaic)(rp, sws), ResampledMosaic(rp, sp, sws, dem_sampler(dem)))
+        end
         # Replayed, not solved fresh: a burst's own `rdr2geo`/resample is as path-dependent as
         # `S1-SLC`'s (see that branch's comment above), and `rung_coregister`'s own reference and
         # secondary mosaics — gated bit-exact against this run's captured `reference.tif`/
@@ -411,7 +434,8 @@ function e2e_imagery(s::Setup)
         refoff === missing && error("$(basename(c.product)): the reference bursts were resampled " *
             "against a cached static layer and this run kept no product/, so the offsets they " *
             "resampled with are not available to replay")
-        ref = radar_mosaic(rp, sws; offsets = refoff, grid = _reference_grid(s.run, sws))
+        ref = (lazy ? lazy_radar_mosaic : radar_mosaic)(rp, sws; offsets = refoff,
+                                                         grid = _reference_grid(s.run, sws))
         sec = ResampledMosaic(rp, sp, sws, dem_sampler(dem);
                               offsets = _secondary_offsets(s.run, sws),
                               grid = _secondary_grid(s.run, sws))
@@ -530,7 +554,7 @@ function run_case(c::GoldenCase; n::Union{Integer,Nothing} = nothing,
         t = @elapsed begin
             r = out[]
             dx = Float32.(r.dx)
-            dy = DY_SIGN .* Float32.(r.dy)
+            dy = dy_sign(c.platform) .* Float32.(r.dy)
             chipx = UInt16.(r.chip_size)
             interp = Matrix{Bool}(r.interpolated)
             search = permutedims(s.geometry.search_x)

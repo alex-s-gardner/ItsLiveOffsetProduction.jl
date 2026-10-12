@@ -177,9 +177,13 @@ function _s2_path(name::AbstractString)
 end
 
 """
-    aligned_scenes(c::GoldenCase) -> (reference, secondary)
+    aligned_scenes(c::GoldenCase; lazy = false) -> (reference, secondary, reference_fp, secondary_fp)
 
-Paths to `c`'s two scenes in one projection, reprojecting both if they are not already.
+Paths to `c`'s two scenes in one projection, reprojecting both if they are not already, and their
+footprints.
+
+With `lazy = true` nothing is warped: a cross-projection pair keeps its source paths and comes back
+with the footprints the warp would produce, for a caller that resamples on read.
 
 `GeogridOptical.coregister` refuses a pair in two coordinate systems outright
 (`GeogridOptical.py:297-298`) — its overlap is index arithmetic in a single system — so the pipeline
@@ -196,13 +200,17 @@ Warped scenes are written to `<cache>/reprojected/<product>/`, mirroring the `re
 the container writes beside its outputs, and are kept: a warp is minutes of compute and, for Landsat,
 requester-pays egress. A pair already in one projection is returned untouched, with nothing written.
 """
-function aligned_scenes(c::GoldenCase)
+function aligned_scenes(c::GoldenCase; lazy::Bool = false)
     rpath, spath = scene_path(c, :reference), scene_path(c, :secondary)
     rfp, sfp = scene_footprint(rpath), scene_footprint(spath)
     target = footprint_epsg(rfp)
     # The footprints come back with the paths. Reading one is a remote open, and the caller needs exactly
     # these two; recomputing them there cost four opens per run where two will do.
     target == footprint_epsg(sfp) && return (rpath, spath, rfp, sfp)
+    # The warped grids without the warp: the paths stay the source scenes', and the caller resamples
+    # them a window at a time onto these footprints (`WarpedScene` in `streamed.jl`).
+    lazy && return (rpath, spath, warped_footprint(rpath, rfp, target),
+                    warped_footprint(spath, rfp, target))
 
     dir = joinpath(CACHE, "reprojected", c.product)
     mkpath(dir)
@@ -248,6 +256,26 @@ function _warp_to(path::AbstractString, reference, target::Integer, dir::Abstrac
     end
     mv(tmp, out; force = true)
     return out
+end
+
+"""
+    warped_footprint(path, reference, target) -> ImageFootprint
+
+The grid `_warp_to` would write the scene at `path` onto — `target`'s projection at `reference`'s
+spacing, `-tap`-aligned — read off a warped VRT, which GDAL builds from the source's header alone.
+"""
+function warped_footprint(path::AbstractString, reference, target::Integer)
+    gdal_network_setup()
+    flags = ["-of", "VRT", "-t_srs", "EPSG:$target",
+             "-tr", string(abs(reference.spacing[1])), string(abs(reference.spacing[2])),
+             "-r", "lanczos", "-tap"]
+    return ArchGDAL.read(path) do src
+        ArchGDAL.gdalwarp([src], flags; dest = "/vsimem/$(gensym()).vrt") do v
+            gt = ArchGDAL.getgeotransform(v)
+            ImageFootprint(origin = (gt[1], gt[4]), spacing = (gt[2], gt[6]),
+                           size = (ArchGDAL.width(v), ArchGDAL.height(v)), crs = EPSG(target))
+        end
+    end
 end
 
 """

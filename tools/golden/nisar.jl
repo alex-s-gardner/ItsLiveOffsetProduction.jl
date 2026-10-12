@@ -12,12 +12,61 @@
 # `grid` is deliberately not imported: the harness uses that name for the parameter grid, and
 # `GeocodedProduct` carries its own as a field.
 using SLCDatasets: NisarRaster, Amplitude, open_geocoded
-import HDF5
+import ChunkManifests
 
 # Reading one of these costs I/O, so a blocked run windows its reads and an unblocked one is refused
 # rather than resolving a pixel at a time.
 AutoRIFT.ondisk(::NisarRaster) = true
 AutoRIFT.ondisk(a::Amplitude) = AutoRIFT.ondisk(a.parent)
+
+# ---------------------------------------------------------------------------
+# Where a granule is read from
+# ---------------------------------------------------------------------------
+
+# Whether a NISAR granule is read from ASF (`true`) or from the `.h5` the driver downloaded into a cached
+# run (`false`). `julia_e2e.jl` reads from ASF; the ladder's rungs read the cached copies.
+const NISAR_REMOTE = Ref(false)
+
+"""
+    nisar_url(name) -> String
+
+The HTTPS URL ASF serves the NISAR granule `name` from, a chunk at a time with an Earthdata Login
+token (`SLCDatasets.RemoteHTTP` takes one from `~/.netrc`).
+
+The collection is named by the granule's level and product type — `NISAR_L1_PR_RSLC_...` is in
+`NISAR_L1_RSLC_BETA_V1` — and `BETA_V1` is the collection version CMR lists these granules under.
+"""
+function nisar_url(name::AbstractString)
+    p = split(name, '_')
+    (length(p) >= 4 && p[1] == "NISAR") || throw(ArgumentError("`$name` is not a NISAR granule name"))
+    return "https://nisar.asf.earthdatacloud.nasa.gov/NISAR/NISAR_$(p[2])_$(p[4])_BETA_V1/$name/$name.h5"
+end
+
+"""
+    nisar_granule(c, name) -> String
+
+Where `c`'s granule `name` is read from: its ASF URL when [`NISAR_REMOTE`](@ref) is set, otherwise the
+`.h5` in the cached run that holds the pair.
+"""
+function nisar_granule(c::GoldenCase, name::AbstractString)
+    NISAR_REMOTE[] && return nisar_url(name)
+    run = c.platform == "NISAR-L1" ? rslc_run(c) : gslc_run(c)
+    run === nothing && error("$(basename(c.product)): no cached run holds both granules; each is " *
+                             "read from the products the driver downloaded")
+    return joinpath(run, name * ".h5")
+end
+
+# A product opened once per process. Opening scans the file's HDF5 metadata — 10-40 s for a remote
+# granule — and the chain asks for the same two products from the geometry, the imagery, the resample
+# and the packaging. The opened product is safe to read from several tasks.
+const _NISAR_OPENED = Dict{Tuple{Symbol,String},Any}()
+const _NISAR_OPENED_LOCK = ReentrantLock()
+
+nisar_slc(path::AbstractString) =
+    @lock _NISAR_OPENED_LOCK get!(() -> open_slc(path), _NISAR_OPENED, (:slc, String(path)))
+nisar_geocoded(path::AbstractString; frequency = nothing) =
+    @lock _NISAR_OPENED_LOCK get!(() -> open_geocoded(path; frequency), _NISAR_OPENED,
+                                  (Symbol(:geocoded, something(frequency, "")), String(path)))
 
 """
     gslc_footprint(path; frequency = nothing) -> ImageFootprint
@@ -28,7 +77,7 @@ A geocoded NISAR product's own map grid, as the footprint [`coregister`](@ref) i
 so a pair in two projections is refused rather than silently intersected.
 """
 function gslc_footprint(path::AbstractString; frequency = nothing)
-    g = open_geocoded(path; frequency).grid
+    g = nisar_geocoded(path; frequency).grid
     return ImageFootprint(origin = g.origin, spacing = g.spacing,
                           size = reverse(g.size), crs = EPSG(g.epsg))
 end
@@ -43,7 +92,7 @@ phase. The byte rescale is not applied — the correlator normalizes every chip,
 only throw resolution away.
 """
 gslc_amplitude(path::AbstractString; frequency = nothing) =
-    SLCDatasets.amplitude(pixels(open_geocoded(path; frequency)))
+    SLCDatasets.amplitude(pixels(nisar_geocoded(path; frequency)))
 
 """
     LazyWindow(parent, row0, col0, dims) <: AbstractMatrix{Float32}
@@ -122,17 +171,22 @@ struct DopplerCentroid
     lut::Matrix{Float64}
 end
 
+# Read through the product's own transport, so a remote granule's LUT is a few range requests. HDF5 stores
+# the LUT row-major `(time, range)`, so the flattened read reshapes to `(range, time)`.
 function DopplerCentroid(path::AbstractString)
-    return HDF5.h5open(path) do f
-        pp = "science/LSAR/RSLC/metadata/processingInformation/parameters"
-        t = read(f["$pp/frequencyA/zeroDopplerTime"])
-        r = read(f["$pp/frequencyA/slantRange"])
-        lut = read(f["$pp/frequencyA/dopplerCentroid"])
-        size(lut) == (length(r), length(t)) || error(
-            "$(basename(path)): the Doppler LUT is $(size(lut)) over $(length(r)) ranges and " *
-            "$(length(t)) times")
-        DopplerCentroid(Float64.(t), Float64.(r), Float64.(lut))
+    b = nisar_slc(path).backend
+    pp = "science/LSAR/RSLC/metadata/processingInformation/parameters/frequencyA"
+    f = ChunkManifests.h5open_typed(b.path; transport = b.transport)
+    t, r, lut = try
+        ds(n) = ChunkManifests.h5_read(f, "$pp/$n", Float64)
+        ds("zeroDopplerTime"), ds("slantRange"), ds("dopplerCentroid")
+    finally
+        close(f)
     end
+    length(lut) == length(r) * length(t) || error(
+        "$(basename(path)): the Doppler LUT holds $(length(lut)) values over $(length(r)) ranges and " *
+        "$(length(t)) times")
+    return DopplerCentroid(t, r, reshape(lut, length(r), length(t)))
 end
 
 function (d::DopplerCentroid)(time::Real, range::Real)
@@ -187,8 +241,8 @@ struct ResampledRSLC{S,DL,DS} <: AbstractMatrix{Float32}
 end
 
 function ResampledRSLC(reference::AbstractString, secondary::AbstractString, dem)
-    rs = open_slc(reference)
-    ss = open_slc(secondary)
+    rs = nisar_slc(reference)
+    ss = nisar_slc(secondary)
     src = pixels(ss)
     eltype(src) <: Complex || error("$(basename(secondary)): the resampler interpolates complex " *
                                     "samples, and this raster holds $(eltype(src))")

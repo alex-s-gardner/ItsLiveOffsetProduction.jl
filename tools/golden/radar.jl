@@ -239,9 +239,9 @@ function s1_pair(c::GoldenCase, run::AbstractString)
     # Acquisition order, not the job's: the products report a positive `date_dt` with the earlier scene as
     # `img1` even on the two jobs whose reference is the later acquisition, so the pipeline reorders the
     # pair before geogrid sees it exactly as it does on the optical path.
-    rg, sg = acquisition_order(c)
-    src(g) = AsfSwaths(g, s1_polarization(g), s1_orbit(run, g))
-    return _s1_pair(src(rg), src(sg), S1_SWATHS; grid = cslc_grid(run, S1_SWATHS))
+    # The run's own granules, read in place: their annotations are the ones ASF's burst extractor serves.
+    rp, sp = _s1_products(c, run)
+    return _s1_pair(SafeSwaths(rp), SafeSwaths(sp), S1_SWATHS; grid = cslc_grid(run, S1_SWATHS))
 end
 
 """
@@ -389,13 +389,7 @@ already downloaded them there.
 """
 function nisar_l1_pair(c::GoldenCase, run::AbstractString)
     early, late = acquisition_order(c)
-    path(name) = begin
-        p = joinpath(run, name * ".h5")
-        isfile(p) || error("$(name).h5 is not in $run. A NISAR L1 pair is read from the products the " *
-                           "driver downloaded there; each is 11.2 GiB.")
-        p
-    end
-    return CoregisteredPair(open_slc(path(early)), open_slc(path(late)))
+    return CoregisteredPair(nisar_slc(nisar_granule(c, early)), nisar_slc(nisar_granule(c, late)))
 end
 
 # ---------------------------------------------------------------------------
@@ -429,6 +423,27 @@ A single-burst subswath takes the early return: the burst is written whole, with
 cropping at all, so its extents are the burst's own.
 """
 function swath_amplitude(p::Sentinel1Product, swath::Integer)
+    a = SwathAmplitude(p, swath)
+    return (a[axes(a, 1), axes(a, 2)], size(a)...)
+end
+
+"""
+    SwathAmplitude(p::Sentinel1Product, swath) <: AbstractMatrix{Float32}
+
+[`swath_amplitude`](@ref)'s merged subswath, read a window at a time: a window reads only the rows of
+the bursts it overlaps, so nothing holds the subswath.
+
+`pieces` is the merge as a list of `(merged rows, raster rows, columns)` placements, applied in order —
+the order matters, since an odd azimuth overlap leaves one line that two bursts both write and the later
+one keeps.
+"""
+struct SwathAmplitude{R} <: AbstractMatrix{Float32}
+    raster::R
+    pieces::Vector{NTuple{3,UnitRange{Int}}}
+    dims::Tuple{Int,Int}
+end
+
+function SwathAmplitude(p::Sentinel1Product, swath::Integer)
     a = annotation(p, swath)
     b = collect(bursts(p, swath))
     n = length(b)
@@ -438,15 +453,16 @@ function swath_amplitude(p::Sentinel1Product, swath::Integer)
     # burst is a row range of it. `read_pixels` on a single burst cannot be used — it is
     # `first(burst_raster(b))` on a `BurstRaster`, which is not iterable.
     raster = burst_raster(first(b).backend).raster
-    amp(i, rows, cols) = abs.(raster[((i - 1) * lpb) .+ rows, cols])
+    burst_rows(i, rows) = ((i - 1) * lpb) .+ rows
+
+    # A single-burst subswath is written whole, with no valid-region cropping at all.
+    n == 1 && return SwathAmplitude(raster, [(1:lpb, burst_rows(1, 1:lpb), 1:spb)], (lpb, spb))
 
     # The annotation's valid bounds are 1-based inclusive; every index below is the reference's 0-based.
     fvl = a.first_valid_line .- 1
     lvl = a.last_valid_line .- 1
     fvs = a.first_valid_sample .- 1
     lvs = a.last_valid_sample .- 1
-
-    n == 1 && return (Float32.(amp(1, 1:lpb, 1:spb)), lpb, spb)
 
     # `get_azimuth_reference_offsets`: where each burst's valid region starts and ends in the merged
     # subswath, from its own sensing time and first valid line.
@@ -456,28 +472,43 @@ function swath_amplitude(p::Sentinel1Product, swath::Integer)
     end
     nlines = 1 + round(Int, (seconds_between(first(a.burst_start), last(a.burst_start)) +
                              (lpb - 1) * dt) / dt)
-    out = zeros(Float32, nlines, spb)
-    # A task per burst. `amp` reads a disjoint window of the shared `StripedTiff`, which allocates its
-    # own gather buffer per call rather than sharing one — the same property `deramped_burst` relies on
-    # to deramp several column slabs at once — so the reads below are concurrent-safe. Computed in
-    # parallel and assigned into `out` serially, so the overlap-splitting arithmetic never has to be
-    # proven data-race-free on top of being correct.
-    pieces = fetch.(map(1:n) do i
-        Threads.@spawn begin
-            # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
-            prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
-            nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
-            bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
-            mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
-            cols = (fvs[i] + 1):lvs[i]      # `slice(first_valid_sample, last_valid_sample)`
-            (mstart, mend, cols, amp(i, (bstart + 1):bend, cols))
-        end
-    end)
-    for (mstart, mend, cols, pix) in pieces
-        out[(mstart + 1):mend, cols] = pix
+    pieces = map(1:n) do i
+        # `//` in the reference is floor division and these overlaps are positive, but `fld` says so.
+        prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
+        nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
+        bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
+        mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
+        # `slice(first_valid_sample, last_valid_sample)`
+        ((mstart + 1):mend, burst_rows(i, (bstart + 1):bend), (fvs[i] + 1):lvs[i])
     end
-    return (out, nlines, spb)
+    return SwathAmplitude(raster, pieces, (nlines, spb))
 end
+
+Base.size(a::SwathAmplitude) = a.dims
+
+function Base.getindex(a::SwathAmplitude, rows::AbstractUnitRange, cols::AbstractUnitRange)
+    checkbounds(a, rows, cols)
+    out = zeros(Float32, length(rows), length(cols))
+    # A task per piece the window touches. Each reads a disjoint window of the shared raster, which
+    # allocates its own gather buffer per call — the same property `deramped_burst` relies on to deramp
+    # several column slabs at once — so the reads are concurrent-safe. Assigned into `out` serially and
+    # in burst order, which is what makes the later burst keep a line two bursts share.
+    reads = map(a.pieces) do (mr, rr, cc)
+        wr, wc = intersect(rows, mr), intersect(cols, cc)
+        (isempty(wr) || isempty(wc)) && return nothing
+        src = rr[(first(wr) - first(mr) + 1):(last(wr) - first(mr) + 1)]
+        (wr, wc, Threads.@spawn abs.(a.raster[src, wc]))
+    end
+    for r in reads
+        r === nothing && continue
+        wr, wc, t = r
+        out[wr .- (first(rows) - 1), wc .- (first(cols) - 1)] = fetch(t)
+    end
+    return out
+end
+
+Base.getindex(a::SwathAmplitude, i::Integer, j::Integer) = a[i:i, j:j][1, 1]
+AutoRIFT.ondisk(::SwathAmplitude) = true
 
 """
     radar_mosaic(p::Sentinel1Product, swaths) -> Matrix{Float32}
@@ -511,43 +542,129 @@ function radar_mosaic(p::Sentinel1Product, swaths; offsets = nothing, grid = not
 end
 
 """
+    lazy_radar_mosaic(p::Sentinel1Product, swaths; offsets = nothing, grid = nothing) -> ResampledMosaic
+
+[`radar_mosaic`](@ref) read a window at a time: each subswath is a [`SwathAmplitude`](@ref), or with
+`offsets` the product resampled onto itself as a [`ResampledSwath`](@ref), stacked by the same
+[`_mosaic_layout`](@ref) — so a window equals the same window of `radar_mosaic`, and nothing holds the
+mosaic.
+"""
+function lazy_radar_mosaic(p::Sentinel1Product, swaths; offsets = nothing, grid = nothing)
+    sws = collect(swaths)
+    lazy = [offsets === nothing ? SwathAmplitude(p, sw) :
+            ResampledSwath(p, p, sw, nothing; offsets = offsets(sw),
+                           grid = grid === nothing ? nothing : grid(sw)) for sw in sws]
+    places, dims = _mosaic_layout(p, sws, [size(x) for x in lazy])
+    return ResampledMosaic(lazy, places, dims)
+end
+
+"""
     burst_offsets(dir) -> (dl, ds)
 
 COMPASS's per-pixel azimuth and range offsets for one burst, as callables on a 0-based `(line, sample)`.
 
 `Geo2Rdr` marks a pixel it could not solve with -1e6. Those are moved far outside the burst rather than
 passed through, so [`resample_burst`](@ref)'s own bounds guard drops them.
+
+Each is an [`IsceOffsets`](@ref), read a window at a time: a burst's pair is 0.55 GB of `Float64`, and a
+pair of three-subswath acquisitions holds dozens of bursts, so reading them whole holds 13 GB on the heap,
+and mapping them puts every page a run touches in the process's resident size.
 """
-function burst_offsets(dir::AbstractString)
-    read_off(name) = permutedims(ArchGDAL.read(ArchGDAL.getband(
-                                     ArchGDAL.read(joinpath(dir, name)), 1)))
-    lookup(A) = (l, s) -> (v = A[l + 1, s + 1]; v <= -1e5 ? -1e7 : v)
-    # An ISCE flat file is described by a sibling `.off.xml`, which GDAL only finds if it may list the
-    # directory. `GDAL_DISABLE_READDIR_ON_OPEN` is `EMPTY_DIR` for the S3 reads elsewhere in these tools,
-    # so it is lifted for these two opens and put back.
-    #
-    # **Under a lock, because `CPLSetConfigOption` is process-wide and these reads are concurrent.** A
-    # subswath's placements are built one task per burst, so without one a task's restore lands while another
-    # is mid-open and GDAL reports `range.off` as "not recognized as being in a supported file format" —
-    # measured at 3 failures in 10 concurrent reads where 10 serial reads all succeed.
-    #
-    # A lock rather than `CPLSetThreadLocalConfigOption`: the thread-local getter returns a pointer into
-    # GDAL's own storage, which the following set invalidates, so restoring the previous value means handing
-    # back a dangling pointer. Serializing costs little here — offsets are read only to replay the
-    # reference's own resample, never on the path a pair is actually processed by.
-    return @lock READDIR_OPTION begin
-        prev = ArchGDAL.getconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", "")
-        ArchGDAL.setconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", "NO")
-        try
-            (lookup(read_off("azimuth.off")), lookup(read_off("range.off")))
-        finally
-            ArchGDAL.setconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", prev)
-        end
-    end
+burst_offsets(dir::AbstractString) =
+    (IsceOffsets(joinpath(dir, "azimuth.off")), IsceOffsets(joinpath(dir, "range.off")))
+
+"""
+    IsceOffsets(path)
+
+One of COMPASS's per-pixel offset rasters, as a callable on a 0-based `(line, sample)`, read from the file
+on demand.
+
+[`_resample_piece`](@ref) asks for the window it resamples through [`_offset_window`](@ref), one
+positioned read per line, so a run holds one window's offsets per task rather than the raster. A scalar
+call reads one value, for a caller that wants a few.
+"""
+struct IsceOffsets
+    path::String
+    io::IOStream
+    dims::Tuple{Int,Int}     # (samples, lines)
 end
 
-# Guards every process-wide flip of `GDAL_DISABLE_READDIR_ON_OPEN`; see [`burst_offsets`](@ref).
-const READDIR_OPTION = ReentrantLock()
+function IsceOffsets(path::AbstractString)
+    dims = _isce_dims(path)
+    filesize(path) == 8 * prod(dims) || error(
+        "$path is $(filesize(path)) bytes, not the $(8 * prod(dims)) its header's $dims describe")
+    return IsceOffsets(String(path), open(path, "r"), dims)
+end
+
+# `Geo2Rdr`'s unsolved marker, moved outside the burst.
+_unsolved(v::Float64) = v <= -1e5 ? -1e7 : v
+
+function _check_offset_window(o::IsceOffsets, lines::AbstractUnitRange, samples::AbstractUnitRange)
+    (first(lines) >= 0 && last(lines) < o.dims[2] && first(samples) >= 0 && last(samples) < o.dims[1]) ||
+        throw(BoundsError("$(o.path) is $(o.dims[2]) lines of $(o.dims[1]) samples; asked for lines " *
+                          "$lines, samples $samples (0-based)"))
+    return nothing
+end
+
+function (o::IsceOffsets)(l::Integer, s::Integer)
+    _check_offset_window(o, l:l, s:s)
+    v = Vector{Float64}(undef, 1)
+    GC.@preserve v unsafe_read_at!(o, Ptr{UInt8}(pointer(v)), 8, 8 * (l * o.dims[1] + s))
+    return _unsolved(v[1])
+end
+
+"""
+    _offset_window(f, lines, samples) -> callable
+
+`f` restricted to the 0-based window `lines` x `samples`, evaluated the way `f` is cheapest to evaluate
+there: an [`IsceOffsets`](@ref) is read once for the whole window, anything else is returned as it is.
+"""
+_offset_window(f, lines::AbstractUnitRange, samples::AbstractUnitRange) = f
+
+function _offset_window(o::IsceOffsets, lines::AbstractUnitRange, samples::AbstractUnitRange)
+    _check_offset_window(o, lines, samples)
+    w = Matrix{Float64}(undef, length(samples), length(lines))
+    bytes = reinterpret(UInt8, vec(w))
+    n = 8 * length(samples)
+    GC.@preserve w for (k, l) in enumerate(lines)
+        # A line is `dims[1]` samples, so the window's part of it is one contiguous read.
+        unsafe_read_at!(o, pointer(bytes, (k - 1) * n + 1), n, 8 * (l * o.dims[1] + first(samples)))
+    end
+    w .= _unsolved.(w)
+    s0, l0 = first(samples), first(lines)
+    return (l, s) -> w[s - s0 + 1, l - l0 + 1]
+end
+
+# `nbytes` of `o`'s file from byte `off` into `p`, with a positioned read so concurrent windows need no lock.
+function unsafe_read_at!(o::IsceOffsets, p::Ptr{UInt8}, nbytes::Integer, off::Integer)
+    done = 0
+    while done < nbytes
+        r = ccall(:pread, Cssize_t, (Cint, Ptr{UInt8}, Csize_t, Int64),
+                  reinterpret(Cint, fd(o.io)), p + done, nbytes - done, off + done)
+        r < 0 && Base.systemerror("pread $(o.path)")
+        r == 0 && throw(EOFError())
+        done += r
+    end
+    return nothing
+end
+
+"""
+    _isce_dims(path) -> (width, length)
+
+An ISCE flat raster's samples per line and lines, from its `.xml` header. Only the layout COMPASS writes
+its offsets in is accepted — one band of little-endian `DOUBLE`, `BIP` — and anything else is an error
+rather than a misread.
+"""
+function _isce_dims(path::AbstractString)
+    xml = read(path * ".xml", String)
+    prop(name) = (m = match(Regex("<property name=\"$name\">\\s*<value>([^<]*)</value>"), xml);
+                  m === nothing ? error("$(path).xml has no `$name` property") : strip(m[1]))
+    layout = (prop("DATA_TYPE"), prop("SCHEME"), prop("BYTE_ORDER"), prop("NUMBER_BANDS"))
+    layout == ("DOUBLE", "BIP", "l", "1") || error(
+        "$path is $(layout) (type, scheme, byte order, bands); only one little-endian DOUBLE band " *
+        "in BIP is read here")
+    return (parse(Int, prop("WIDTH")), parse(Int, prop("LENGTH")))
+end
 
 """
     cslc_grid(run, swaths) -> (swath -> (lines, samples)) or `nothing`
@@ -560,7 +677,12 @@ of the subswath.
 written by `rdr2geo` has no offsets and its CSLC is the annotation's burst, so the annotation is already
 right there.
 """
+# Set to ignore a run's COMPASS products, so a full-SLC pair takes the lattice path: the reference's own
+# bursts, and the secondary resampled onto them through `_offset_lattice` (`julia_e2e.jl --lattice`).
+const FORCE_LATTICE = Ref(false)
+
 function cslc_grid(run::AbstractString, swaths)
+    FORCE_LATTICE[] && return nothing
     isdir(joinpath(run, "product")) || return nothing
     dirs = Dict(sw => resampled_burst_dirs(run, sw) for sw in swaths)
     any(isempty, values(dirs)) && return nothing
@@ -587,18 +709,8 @@ not, and every extent in the mosaic depends on this one:
 Dimensions only, so this costs a header read rather than the quarter-gigabyte the offsets themselves are.
 """
 function burst_offset_grid(dir::AbstractString)
-    # `READDIR_OPTION` for the same reason [`burst_offsets`](@ref) holds it: this is called once per burst
-    # from the same per-burst tasks, and the option it flips is process-wide.
-    return @lock READDIR_OPTION begin
-        prev = ArchGDAL.getconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", "")
-        ArchGDAL.setconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", "NO")
-        try
-            ds = ArchGDAL.read(joinpath(dir, "azimuth.off"))
-            (ArchGDAL.height(ds), ArchGDAL.width(ds))
-        finally
-            ArchGDAL.setconfigoption("GDAL_DISABLE_READDIR_ON_OPEN", prev)
-        end
-    end
+    width, len = _isce_dims(joinpath(dir, "azimuth.off"))
+    return (len, width)
 end
 
 """
@@ -1297,7 +1409,7 @@ function secondary_swath_amplitude(rp::Sentinel1Product, sp::Sentinel1Product, s
     r = ResampledSwath(rp, sp, swath, dem; offsets, grid)
     out = zeros(Float32, size(r))
     # One scratch buffer for the whole subswath rather than one `undef` allocation per burst: every
-    # burst of a subswath shares the same `extent` (the reference's lines/samples per burst), which is
+    # burst of a subswath shares the same `extent` (the secondary's lines/samples per burst), which is
     # an upper bound on the band `deramped_burst` ever asks for.
     lpb, spb = first(r.places).extent
     scratch = Matrix{ComplexF32}(undef, lpb, spb)
@@ -1333,6 +1445,8 @@ struct BurstPlacement{C,DL,DS}
     samples::UnitRange{Int}
     mosaic_rows::UnitRange{Int}
     mosaic_cols::UnitRange{Int}
+    # The secondary burst's `(lines, samples)`, which the source band, the support rejection and the
+    # Doppler test are bounded by.
     extent::Tuple{Int,Int}
 end
 
@@ -1374,6 +1488,13 @@ function ResampledSwath(rp::Sentinel1Product, sp::Sentinel1Product, swath::Integ
     sa = annotation(sp, swath)
     n = nbursts(a)
     lpb, spb = a.lines_per_burst, a.samples_per_burst
+    # **The source burst's shape is the secondary's own**, and it need not be the reference's: on
+    # `S1A_IW_SLC__1SSH_20150828` the secondary's bursts are 1501 x 20550 against the reference's
+    # 1499 x 19717 on IW1. It sets where burst `i` starts in the stacked raster, the carrier's middle
+    # line, and every bound `ResampSlc` takes off its source grid (`s1_resample.py` builds the radar
+    # grid, Doppler LUT and carrier from the secondary burst). Indexing the secondary raster with the
+    # reference's line count reads burst `i` from `(i - 1) * (slpb - lpb)` lines too early.
+    slpb, sspb = sa.lines_per_burst, sa.samples_per_burst
     dt = a.azimuth_time_interval
     sraster = burst_raster(first(collect(bursts(sp, swath))).backend).raster
     fvl = a.first_valid_line .- 1
@@ -1415,7 +1536,7 @@ function ResampledSwath(rp::Sentinel1Product, sp::Sentinel1Product, swath::Integ
         Threads.@spawn begin
         ss = sb[i]
         cs = RadarCoordinate(ss)
-        carrier = CarrierFit(TopsCarrier(ss, cs, lpb), lpb, spb)
+        carrier = CarrierFit(TopsCarrier(ss, cs, slpb), slpb, sspb)
         dl, ds = if offsets === nothing
             _offset_lattice(RadarCoordinate(rb[i]), cs, dem, lpb, spb)
         else
@@ -1429,11 +1550,11 @@ function ResampledSwath(rp::Sentinel1Product, sp::Sentinel1Product, swath::Integ
         # `min(lvs, ns)`: the valid-sample window is the annotation's and the raster it indexes is the
         # CSLC's, which can be the narrower of the two. NumPy's slicing truncates there in silence.
         cols = n == 1 ? (1:ns) : ((fvs[i] + 1):min(lvs[i], ns))
-        BurstPlacement(i, ((i - 1) * lpb + 1):(i * lpb), carrier, dl, ds,
+        BurstPlacement(i, ((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds,
                        (sa.first_valid_line[i] - 1, sa.last_valid_line[i] - 1,
                         sa.first_valid_sample[i] - 1, sa.last_valid_sample[i] - 1),
                        bstart:(bend - 1), (first(cols) - 1):(last(cols) - 1),
-                       (mstart + 1):mend, cols, (lpb, spb))
+                       (mstart + 1):mend, cols, (slpb, sspb))
         end
     end))
     # `Int`: a `grid` read from the CSLC's own header carries whatever integer type that header
@@ -1534,7 +1655,9 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
                          samples::AbstractUnitRange, dest::AbstractMatrix{Float32};
                          scratch::Union{AbstractMatrix{ComplexF32},Nothing} = nothing)
     lpb, spb = p.extent
-    ymin, ymax, xmin, xmax = _support_bounds(p.dl, p.ds, lines, samples)
+    # A per-pixel offset raster is read for this window once, rather than a value at a time.
+    dl, ds = _offset_window(p.dl, lines, samples), _offset_window(p.ds, lines, samples)
+    ymin, ymax, xmin, xmax = _support_bounds(dl, ds, lines, samples)
     brows = clamp(floor(Int, ymin) - 3, 1, lpb):clamp(ceil(Int, ymax) + 4, 1, lpb)
     bcols = clamp(floor(Int, xmin) - 3, 1, spb):clamp(ceil(Int, xmax) + 4, 1, spb)
     origin = (first(brows) - 1, first(bcols) - 1)
@@ -1559,7 +1682,7 @@ function _resample_piece(r::ResampledSwath, p::BurstPlacement, lines::AbstractUn
     # No valid-window guard: measured, ISCE3's own criterion is the raster's bounds rather than the
     # annotation's valid region. Guarding on the valid window declines 137,782 pixels `secondary.tif`
     # fills, to avoid filling 2,746 it does not — fifty times the error it removes.
-    return resample_burst(deramped, p.dl, p.ds, lines, samples; doppler = p.extent, origin,
+    return resample_burst(deramped, dl, ds, lines, samples; doppler = p.extent, origin,
                           extent = p.extent, dest)
 end
 

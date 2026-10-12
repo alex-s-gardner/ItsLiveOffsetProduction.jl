@@ -14,7 +14,8 @@ julia --project=tools/golden -e 'import Pkg; Pkg.instantiate()'
 julia --project=tools/golden tools/golden/validate_itslive_write.jl <case-fragment>
 julia --project=tools/golden tools/golden/run_all_golden.jl              # every case
 
-# Two raw granules to a product netCDF, with nothing taken from the reference.
+# Two raw granules to a product netCDF, with nothing taken from the reference. Optical granules are
+# streamed from their buckets and NISAR granules from ASF (Earthdata Login from ~/.netrc).
 AWS_PROFILE=itslive julia --project=tools/golden -t 8 \
     tools/golden/julia_e2e.jl LC08_L1TP_009011_20200703 --compare-intermediate
 
@@ -53,9 +54,10 @@ Scripts here load both `AutoRIFT` and `ItsLiveOffsetProduction`, so the moved AP
 ## Future change: fetching only the chunks a pair needs
 
 Over sparse glacier coverage much of a scene is never correlated, so downloading all of it is waste.
-`OpticalRaster` is already a `DiskArrays` array with a real chunk grid, so per-chunk reads are available;
-what is missing is a cache and a consumer that asks for chunks rather than the whole overlap. This was
-**deferred, not rejected**, blocked on a single thing that is now gone.
+`julia_e2e.jl` reads each scene a tile at a time through a `TileCache` (next section), but
+`native_imagery` fills every tile of the overlap before the no-data mask is sampled, so the whole overlap
+is still fetched. What is missing is a rule for which tiles to skip. This was **deferred, not rejected**,
+blocked on a single thing that is now gone.
 
 **The former blocker, cleared.** `AutoRIFT.bytescale` was a two-pass whole-array reduction whose global
 mean and sample standard deviation set every quantized pixel, so a chunk never downloaded would have
@@ -64,7 +66,7 @@ changed the quantization of every pixel that was. `native_imagery`/`radar_imager
 is now the only pass in this path, and nothing here still needs an image-wide statistic. This change is
 unblocked; it has not been made.
 
-**What is still required even then.** `_accumulate_zeros!` samples the scene at grid points to build the
+**What is still required even then.** `_accumulate_zeros_banded!` samples the scene at grid points to build the
 no-data mask, so a chunk holding grid points is still read. That is point-wise rather than global, which
 is what makes skipping possible at all.
 
@@ -90,27 +92,35 @@ took a 338 MiB band from 54.9 s to 32.3 s over `/vsis3` (`OpticalDatasets.jl`'s 
 `open_optical` docstring). A chunk is 0.12 MiB, so per-request latency can easily cost more than 14%
 fewer bytes saves. The condition on this change is that it not degrade runtime.
 
-## Future change: blocking the correlation to cut peak memory
+## How `julia_e2e.jl` holds the imagery
 
-Separate from the above, and the larger lever on memory. The L8 case peaked at 12.46 GiB resident, of
-which the imagery was about 3.0 GiB — two full-scene `Float32` buffers at 1.09 GiB each, a `Bool`, and
-two `UInt8`. **That figure predates removing `bytescale`** (previous section): the two retained
-per-scene images are now `Float32` copies rather than `UInt8` ones, four bytes a pixel against one, so
-the imagery share is larger now and the peak needs re-measuring rather than assumed unchanged. The
-remainder is the untiled correlator, which `process_block_size` bounds and which needs no lazy reading
-at all. Blocking has been measured elsewhere in this codebase at 36–56% lower peak.
+**Optical pairs are lazy and correlated blocked.** Each scene is a chain of windowed arrays
+(`streamed.jl`): the granule's object, the native filter `process.py` applies to it, the warp onto the
+reference's projection for a pair that straddles a UTM zone, and the crop to the overlap. A `TileCache`
+keeps each 1024² tile of the result on local scratch once derived, and the correlator filters a block at
+a time (`preprocess` is the correlator filter, not `:none`), keeping each filtered 512² tile in a second
+scratch file. Both caches are read and written with positioned I/O (`--cache-io pread`) rather than mapped,
+so their pages stay in the kernel's file cache instead of the process's resident size; `--cache-io mmap`
+maps them. Two parts are not windowed:
 
-The change is small: `julia_e2e.jl` correlates with `AutoRIFT.autorift(b2, b1, grid, p)`, and the blocked
-form is `AutoRIFT.autorift(b2, b1, grid, p, (b.X, b.Y))` with
-`b = AutoRIFT.block_size_for(grid, p, size(b1))` — the five-positional method already exists, and
-`e2e_run.jl` does exactly this for the radar path. Neither `cache_budget` nor `filter_cache_tile` applies
-here: the filtered images are resident and the correlator is given `preprocess = :none`, so no per-block
-filtering happens and the halo is the correlation reach alone.
+  * `:fft` (Landsat 4/5) — `Destripe`'s band-reject is chosen from a whole-scene spectrum, so the scene is
+    streamed whole, filtered, and held in a memory-mapped scratch file.
+  * The warp is GDAL's Lanczos warp of one window at a time. It reproduces `_warp_to`'s grid exactly and
+    its values to within 1 DN at 99.8% of pixels on `LE07_L1TP_061018_20120428`; the rest differ where
+    GDAL's approximate transformer, which interpolates across each warp chunk, lands a no-data edge on the
+    other side of a pixel.
 
-**What blocking costs, by grid type.** On axis-aligned grids it costs nothing in the answer: AutoRIFT's
-`dev/GATES.md` records the Landsat sweep keeping `dx`/`dy`/`correlation` "bit-identical to an untiled run
-at every block size". On a rotated radar geogrid it is not yet safe — `dev/CORRECTNESS.md` records 5.3%
-of an S1B run's points differing from untiled (26,781 lost, 771 gained, 25,206 measured differently),
-traced to a coarse-pass radius-widening rule that lets the reference search a scene corner no block's
-read window can reach, and names it the blocker for tiled processing. So this is adoptable for optical
-before it is adoptable for radar.
+On axis-aligned grids blocking costs nothing in the answer: AutoRIFT's `dev/GATES.md` records the Landsat
+sweep keeping `dx`/`dy`/`correlation` "bit-identical to an untiled run at every block size", and the
+streamed, blocked `LC08_L1TP_009011_20200703` product is bit-identical to the staged untiled one.
+
+**`WallisGapfill` noise is per window.** The native and correlator fills draw from a seeded generator per
+window and per block, so filled values differ from a whole-scene call's; which pixels are filled does
+not. The reference's own fill is unseeded, so it does not reproduce itself either (rung 5.4).
+
+**Radar pairs are lazy and correlated blocked too.** The Sentinel-1 reference mosaic is assembled a window
+at a time (`lazy_radar_mosaic`), the secondary is resampled a window at a time (`ResampledMosaic`,
+`ResampledRSLC`), and each is behind a `TileCache`. On a rotated radar geogrid blocked and untiled runs do
+not agree exactly: `dev/CORRECTNESS.md` on `AutoRIFT.jl` records 5.3% of an S1B run's points differing
+(26,781 lost, 771 gained, 25,206 measured differently), traced to a coarse-pass radius-widening rule that
+lets the untiled run search a scene corner no block's read window can reach.
