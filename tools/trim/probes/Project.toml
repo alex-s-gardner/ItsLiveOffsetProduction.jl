@@ -1,0 +1,33 @@
+[deps]
+AutoRIFT = "52cb0ed0-aa80-430c-bd04-c52888a79add"
+ChunkManifests = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+EzXML = "8f5d6c58-4d21-5cfd-889c-e3ad7ee6a615"
+FastGeoProjections = "981663e8-0c94-46dd-b2cf-efc8480900ec"
+GDAL = "add2ef01-049f-52c4-9ee2-e494f65e021a"
+HDF5_jll = "0234f1f7-429e-5d53-9886-15a909be8d59"
+ImagePairGeometry = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
+ItsLiveOffsetProduction = "74356795-1a89-4ad9-90d1-877978e2d409"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+LibCURL = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
+LibCURL_jll = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+NetCDF_jll = "7243133f-43d8-5620-bbf4-c2c921802cf3"
+NetworkOptions = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
+OpenJpeg_jll = "643b3616-a352-519d-856d-80112ee9badc"
+OpticalDatasets = "a0fc030c-aaa4-4e24-9fdc-1cbe49ce0bda"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
+ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
+Zlib_jll = "83775a58-1f1d-513f-b197-d71354ab007a"
+
+[sources]
+AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+ChunkManifests = {rev = "main", url = "https://github.com/alex-s-gardner/ChunkManifests.jl"}
+FastGeoProjections = {rev = "main", url = "https://github.com/alex-s-gardner/FastGeoProjections.jl"}
+ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
+ItsLiveOffsetProduction = {path = "../../.."}
+OpticalDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
+Zarr = {rev = "complex-int-dtype", url = "https://github.com/alex-s-gardner/Zarr.jl"}

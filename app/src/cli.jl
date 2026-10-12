@@ -1,0 +1,225 @@
+# The command line.
+
+const USAGE = """
+usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [options]
+
+  sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2
+  reference    a scene's band — a local path, an s3:// URI or an https:// URL — or its STAC item
+  secondary    (a local .json or a URL). Landsat: the <scene>_B8.TIF (L7, L8, L9) or <scene>_B2.TIF
+               (L4, L5) band, with <scene>_MTL.json and <scene>_ANG.txt beside it, or a landsatlook
+               STAC item. Sentinel-2: the B08.jp2 inside a .SAFE, or an Earth Search STAC item.
+               Sentinel-1 (S1): the IW SLC product's .SAFE directory or its .zip, local or a URL;
+               (S1BURST) the bursts' extractor URLs, comma-separated
+               (https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff), or the
+               SAFE burst2safe assembles from them.
+               NISAR: the RSLC (NL1) or GSLC (NL2) granule's .h5.
+  output.nc    where the ITS_LIVE product is written
+
+options:
+  --scratch DIR        local scratch for the run's tile caches (default: \$TMPDIR/autorift_itslive_production)
+  --cache-io MODE      pread (default) or mmap, how the scratch tile caches are accessed
+  --filter-tile N      side of the filtered-tile cache's tiles in pixels (default 512)
+  --heap-hint-gib N    heap size the collector aims to stay under, GiB (default 12; 0 for none)
+  --orbit-dir DIR      S1: the directory holding each product's precise orbit (.EOF) file; without it the
+                       files are downloaded from the public s1-orbits bucket
+  --dem PATH           S1, NL1: a geographic (EPSG:4326) DEM of heights above the WGS84 ellipsoid for the
+                       resample's terrain solve, in place of the ITS_LIVE parameter region's DEM plus
+                       the EGM2008 geoid
+  --quiet              no per-stage timings on stderr
+
+FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
+copy of the wisdom the bundle ships for this CPU (share/autorift_itslive_production/fftw-wisdom), so runs
+plan their transforms alike, and discards what it measures.
+
+Landsat is read from s3://usgs-landsat, which is requester-pays: the AWS credential chain (environment,
+AWS_PROFILE, container or instance role) must name an account that can pay. A NISAR granule over https://
+from an Earthdata host is read with the token in EARTHDATA_TOKEN, or one obtained with the
+urs.earthdata.nasa.gov credentials in ~/.netrc. Sentinel-1 bursts are fetched from ASF's burst extractor
+with those ~/.netrc credentials, waiting while the extractor generates them, and downloaded into the
+run's scratch directory.
+"""
+
+"""
+    Arguments
+
+A parsed command line: the job's inputs, the output path, the run options and the heap hint.
+"""
+struct Arguments
+    sensor::String
+    reference::String
+    secondary::String
+    output::String
+    options::RunOptions
+    heap_hint_gib::Float64
+end
+
+"""
+    parse_args(args) -> Arguments
+
+The command line. Throws an `ArgumentError` naming the problem for anything it cannot use.
+"""
+function parse_args(args::Vector{String})
+    positional = String[]
+    scratch = joinpath(tempdir(), "autorift_itslive_production")
+    cache_io = :pread
+    filter_tile = 512
+    hint = HEAP_HINT_GIB
+    verbose = true
+    dem = ""
+    orbit_dir = ""
+    i = 1
+    while i <= length(args)
+        a = args[i]
+        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir")
+            i < length(args) || throw(ArgumentError(a * " needs a value"))
+            v = args[i + 1]
+            if a == "--scratch"
+                scratch = v
+            elseif a == "--dem"
+                dem = v
+            elseif a == "--orbit-dir"
+                orbit_dir = v
+            elseif a == "--cache-io"
+                v in ("pread", "mmap") || throw(ArgumentError("--cache-io is pread or mmap, got " * v))
+                cache_io = v == "pread" ? :pread : :mmap
+            elseif a == "--filter-tile"
+                n = tryparse(Int, v)
+                (n === nothing || n < 1) && throw(ArgumentError("--filter-tile needs a positive integer, got " * v))
+                filter_tile = n
+            else
+                h = tryparse(Float64, v)
+                (h === nothing || h < 0) && throw(ArgumentError("--heap-hint-gib needs a nonnegative number, got " * v))
+                hint = h
+            end
+            i += 2
+        elseif a == "--quiet"
+            verbose = false
+            i += 1
+        elseif startswith(a, "--")
+            throw(ArgumentError("unknown option " * a))
+        else
+            push!(positional, a)
+            i += 1
+        end
+    end
+    length(positional) == 4 || throw(ArgumentError(
+        "expected <sensor> <reference> <secondary> <output.nc>, got " * string(length(positional)) *
+        " positional arguments"))
+    return Arguments(uppercase(positional[1]), positional[2], positional[3], positional[4],
+                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint)
+end
+
+# An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
+# exception: the message of the exception types the chain throws, else the exception's type name.
+function error_message(err)
+    m = err isa ArgumentError ? err.msg :
+        err isa ErrorException ? err.msg :
+        err isa DimensionMismatch ? err.msg :
+        err isa GDAL.GDALError ? err.msg : nothing
+    return m isa String ? m : string(nameof(typeof(err)))
+end
+
+"""
+    julia_main(args = ARGS) -> Cint
+
+The executable's entry point: parse the command line, run the job, and return `0`, or print the error and
+return `1` (`2` for a usage error).
+"""
+function julia_main(args::Vector{String} = ARGS)::Cint
+    if isempty(args) || args[1] in ("-h", "--help")
+        write(Core.stderr, USAGE)
+        return isempty(args) ? Cint(2) : Cint(0)
+    end
+    a = try
+        parse_args(args)
+    catch err
+        say("error: " * error_message(err))
+        return Cint(2)
+    end
+    try
+        set_heap_hint!(a.heap_hint_gib)
+        job = Job(a.sensor, a.reference, a.secondary)
+        path = run_job(job, a.output; options = a.options)
+        say("wrote " * path)
+        return Cint(0)
+    catch err
+        say("error: " * error_message(err))
+        return Cint(1)
+    end
+end
+
+# The path of the running executable.
+function _exepath()
+    buf = Vector{UInt8}(undef, 4096)
+    n = Ref{Csize_t}(length(buf))
+    ccall(:uv_exepath, Cint, (Ptr{UInt8}, Ref{Csize_t}), buf, n) == 0 ||
+        throw(ErrorException("cannot find the path of the running executable"))
+    return String(buf[1:n[]])
+end
+
+# Set to the per-run wisdom directory `ensure_environment` made, which the run deletes when it ends.
+const TEMP_WISDOM_VAR = "AUTORIFT_ITSLIVE_TEMP_WISDOM"
+
+# The FFTW wisdom the bundle ships: `share/autorift_itslive_production/fftw-wisdom` beside `bin/`, one file
+# per CPU model, named as `AutoRIFT.fftw_wisdom_path` names it.
+bundled_wisdom_dir(exe::String) = joinpath(dirname(dirname(exe)), "share", "autorift_itslive_production", "fftw-wisdom")
+
+"""
+    ensure_environment(args)
+
+Two settings a `juliac` executable reads only when its runtime starts, so the executable runs itself again
+with them set and the same arguments when either is missing:
+
+  * `JULIA_NUM_THREADS`, without which it runs on one thread: `auto`, every core the process may use. A
+    caller limits the threads by setting it.
+  * `AUTORIFT_FFTW_WISDOM_DIR`, which `AutoRIFT` reads its FFTW wisdom from when it loads: a new temporary
+    directory holding a copy of [`bundled_wisdom_dir`](@ref)'s files, deleted when the run ends. Every
+    run therefore starts from the same wisdom, and nothing a run measures outlives it. A caller keeps its
+    own wisdom by setting the variable.
+"""
+function ensure_environment(args::Vector{String})
+    need_threads = !haskey(ENV, "JULIA_NUM_THREADS")
+    need_wisdom = !haskey(ENV, "AUTORIFT_FFTW_WISDOM_DIR")
+    (need_threads || need_wisdom) || return nothing
+    exe = _exepath()
+    need_threads && (ENV["JULIA_NUM_THREADS"] = "auto")
+    if need_wisdom
+        dir = mktempdir(; cleanup = false)
+        src = bundled_wisdom_dir(exe)
+        if isdir(src)
+            for f in readdir(src)
+                endswith(f, ".wisdom") && cp(joinpath(src, f), joinpath(dir, f))
+            end
+        end
+        ENV["AUTORIFT_FFTW_WISDOM_DIR"] = dir
+        ENV[TEMP_WISDOM_VAR] = dir
+    end
+    argv = String[exe; args]
+    ptrs = Ptr{UInt8}[pointer(a) for a in argv]
+    push!(ptrs, Ptr{UInt8}(C_NULL))
+    GC.@preserve argv ptrs ccall(:execv, Cint, (Cstring, Ptr{Ptr{UInt8}}), exe, ptrs)
+    throw(ErrorException("could not run " * exe * " again with its thread count and FFTW wisdom set"))
+end
+
+# The per-run wisdom directory, removed once the run is over.
+function remove_temp_wisdom()
+    dir = get(ENV, TEMP_WISDOM_VAR, "")
+    (!isempty(dir) && dir == get(ENV, "AUTORIFT_FFTW_WISDOM_DIR", "")) || return nothing
+    rm(dir; recursive = true, force = true)
+    return nothing
+end
+
+# The entry point `juliac` builds an executable from.
+function (@main)(args::Vector{String})::Cint
+    try
+        ensure_environment(args)
+    catch err
+        say("error: " * error_message(err))
+        return Cint(1)
+    end
+    try
+        return julia_main(args)
+    finally
+        remove_temp_wisdom()
+    end
+end
