@@ -1,0 +1,37 @@
+name = "AutoriftItsLiveProduction"
+uuid = "2548e727-6365-4c30-83ec-f8cedf283c4c"
+version = "0.1.0"
+authors = ["Alex S. Gardner, JPL/NASA"]
+
+[deps]
+AutoRIFT = "52cb0ed0-aa80-430c-bd04-c52888a79add"
+ChunkManifests = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+FastGeoProjections = "981663e8-0c94-46dd-b2cf-efc8480900ec"
+GDAL = "add2ef01-049f-52c4-9ee2-e494f65e021a"
+GeoFormatTypes = "68eda718-8dee-11e9-39e7-89f7f65f511f"
+ImagePairGeometry = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
+ItsLiveOffsetProduction = "74356795-1a89-4ad9-90d1-877978e2d409"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+NetworkOptions = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
+OpticalDatasets = "a0fc030c-aaa4-4e24-9fdc-1cbe49ce0bda"
+SLCDatasets = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
+StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
+
+[sources]
+AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+ChunkManifests = {rev = "main", url = "https://github.com/alex-s-gardner/ChunkManifests.jl"}
+FastGeoProjections = {rev = "main", url = "https://github.com/alex-s-gardner/FastGeoProjections.jl"}
+ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
+ItsLiveOffsetProduction = {path = ".."}
+OpticalDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
+SLCDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
+Zarr = {rev = "complex-int-dtype", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+
+[compat]
+GDAL = "1.13.0"
+SLCDatasets = "0.2"
+StructTypes = "1.11.0"
+julia = "1.11"

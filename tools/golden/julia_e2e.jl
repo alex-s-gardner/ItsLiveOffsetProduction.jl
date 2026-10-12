@@ -1,14 +1,18 @@
 # From two granules to the ITS_LIVE product netCDF, with nothing taken from the reference.
 #
-#   julia --project=tools/golden -t 12 tools/golden/julia_e2e.jl LC08_L1TP_009011_20200703
-#   julia --project=tools/golden -t 12 tools/golden/julia_e2e.jl LC08_L1TP_009011_20200703 --compare-intermediate
+#   AWS_PROFILE=itslive julia --project=tools/golden -t 12 tools/golden/julia_e2e.jl LC08_L1TP_009011_20200703
 #   AWS_PROFILE=itslive julia --project=tools/golden -t 12 tools/golden/julia_e2e.jl \
-#       LC08_L1TP_009011_20200703 --stream
+#       LC08_L1TP_009011_20200703 --compare-intermediate
 #
-# **`--stream` is the arm to time against the container.** `process.py` hands GDAL `/vsis3/` paths and
-# reads the granule over the network inside its own timed region; staging the scenes locally first, which
-# is the default here, measures less work than the reference does. Reading over `/vsis3` needs
-# `AWS_PROFILE` to name credentials that can pay, since `s3://usgs-landsat` is requester-pays.
+# **The optical granules are streamed, never staged.** Each scene is read from its own object — Landsat
+# from `s3://usgs-landsat`, Sentinel-2 from the Google mirror over HTTPS — a chunk at a time, inside the
+# timed region, as `process.py` reads them through GDAL's `/vsis3/` and `/vsicurl/`. `s3://usgs-landsat`
+# is requester-pays, so `AWS_PROFILE` has to name credentials that can pay. What is kept locally is a
+# run's scratch: the tiles of each image the correlator has already been handed, deleted when the run
+# ends (`TileCache`, `streamed.jl`). A NISAR granule is read from ASF over HTTPS with an Earthdata Login
+# token taken from `~/.netrc` (`nisar_url`). A Sentinel-1 pair is still read from local SAFE trees: a
+# full-SLC granule is a `.zip` on ASF, expanded under the golden cache (`stage_safe`), and a burst pair's
+# SAFE trees are in its run directory.
 #
 # **What was missing.** `e2e_run.jl` runs the chain from the granule to `dx`/`dy`, and
 # `validate_itslive_write.jl` writes a product — but from the reference's own captured arrays. So no run
@@ -33,10 +37,15 @@
 # the chop or the correlator; that mode can.
 
 include("e2e_run.jl")      # `setup`, `_chop_to`, `_cropped_scene`, the memory trace, `packaging.jl`
+include("streamed.jl")     # the lazy, streamed optical scene the correlator reads
+
+# NISAR granules are read from ASF a chunk at a time, as the optical ones are from their buckets.
+NISAR_REMOTE[] = true
 include("product.jl")
 include("compare.jl")
 
 using Dates, NCDatasets, OpticalDatasets
+import AWSS3, ChunkManifests
 # Loaded, not called: `cf_grid_mapping` comes from `ItsLiveOffsetProduction`, whose trigger is
 # Rasters plus DimensionalData plus ArchGDAL plus DiskArrays, and a product cannot be written without
 # the CF grid-mapping attributes it builds.
@@ -70,10 +79,16 @@ const RUN_FOR_OUTPUT = 900
 # ---------------------------------------------------------------------------
 
 """
-    native_imagery(s::Setup) -> (early, late, declined, declined_shifted, filter)
+    native_imagery(s::Setup; cache_io = :pread) -> (early, late, declined, declined_shifted, filter)
 
-The two filtered `Float32` images the correlator is handed, and the driver's no-data mask, in one pass
-over each scene.
+The two images the correlator is handed, unfiltered by the correlator's own filter, and the driver's
+no-data mask.
+
+**Each image is lazy, streamed and cached a tile at a time.** [`streamed_scene`](@ref) composes the
+granule's object with the steps `process.py` applies to the native scene; the overlap is a crop of that
+([`LazyWindow`](@ref)), and a [`TileCache`](@ref) keeps each tile once derived, because the correlator
+reads every block once per pass. No scene-sized array is held in memory. The correlator applies
+`filter` itself a block at a time — `native_run` passes it as `preprocess` and correlates blocked.
 
 **Not quantized to `UInt8`.** The reference's `uniform_data_type` (`autoRIFT.py:359-384`) exists for its
 own memory budget, not for anything the correlator needs — `AutoRIFT.jl`'s correlator takes any element
@@ -81,44 +96,23 @@ type, and `ZNCC` already removes each correlation window's own mean and scale, s
 standard deviation and rescale onto 256 levels buys nothing here, at the cost `dev/CORRECTNESS.md` item
 4b on `AutoRIFT.jl` quantifies — up to 7 px on one scene, a 31x tie-breaking disparity in the base
 level's weakest correlation quartile. So this is a deliberate divergence from what the Python reference's
-current `DataType = 0` default produces, matching `e2e_run.jl`'s own imagery pipeline rather than
-`julia_e2e.jl`'s former byte path.
+current `DataType = 0` default produces.
 
-**One pass, because the scene is read once and nothing full-size is copied before filtering.** The
-window is read straight into a `Float32` buffer, so the `UInt16` scene is never materialized and there is
-no separate conversion pass over 291 million pixels; the filter writes into a second buffer with
-[`AutoRIFT.highpass!`](@ref); and both buffers are reused for the second scene rather than reallocated.
-
-**Removing the quantization removes two whole-image passes, not an array.** `bytescale`'s own output
-replaced `filtered` as what got kept, so the array count is the same either way — one copy per scene,
-now of `filtered` itself rather than of `bytescale`'s rescaled result. What is gone is the mean-then-
-variance reduction and the elementwise rescale-round-clamp pass `bytescale` ran to compress the field
-onto 256 levels; the kept copy is `Float32`, four bytes against `UInt8`'s one, because full precision is
-the entire reason not to quantize — this was never a memory optimization available to give up for free.
-
-**The mask is accumulated here because the unfiltered values are only available here.** A point is
-declined where *either* scene reads zero (`testautoRIFT.py:337-349`), and zero converts exactly, so the
-`Float32` buffer answers the same question the raw integers would. Accumulating per scene is what lets the
-buffer be reused: the alternative holds both scenes' pixels at once purely to compare them.
-
-Both sampling offsets are accumulated, so `--compare-intermediate` can score the choice without the
-imagery being retained for it.
+**The mask is sampled from the image the correlator is handed.** A point is declined where *either*
+scene reads zero (`testautoRIFT.py:337-349`) in the scene after the native filter and the warp, which is
+what the reference tests. Both sampling offsets are accumulated, so `--compare-intermediate` can score
+the choice.
 """
-function native_imagery(s::Setup)
+function native_imagery(s::Setup; cache_io::Symbol = :pread)
     c = s.case
     m = correlator_filter(c)
-    m isa AutoRIFT.Highpass || error(
-        "this script covers the optical `hps` path, whose scene is filtered inside the correlator; " *
-        "$(basename(c.product)) uses $m, which `process.py` applies to the native scene first and " *
-        "which rung 5.3 is what reproduces")
     early, late = acquisition_order(c)
-    # The offsets come from `coregister` in the job's reference/secondary order, and the arrays are
-    # named by acquisition. Equal on every case but the two reversed jobs, and a silent mismatch there
-    # would pair each scene with the other's offset.
-    first(c.reference) == early || error(
-        "$(basename(c.product)) is a reversed job — its reference acquisition is $(first(c.reference)) " *
-        "but the earlier acquisition is $early — so the coregistration offsets and the scene paths " *
-        "would be paired the wrong way round here")
+    # `setup` coregisters the scenes `scene_path` names, and it names them by acquisition — `:reference`
+    # is the earlier — so `reference_offset` is the earlier scene's on a reversed job too.
+    s.reference_path == scene_path(c, :reference) || error(
+        "$(basename(c.product)): the setup's reference scene is $(s.reference_path), not the earlier " *
+        "acquisition's $(scene_path(c, :reference)), so the coregistration offsets would be paired " *
+        "with the wrong scenes")
 
     want = reverse(_coord_size(s.pair.coordinate))      # (ny, nx) of the overlap
     g = s.geometry
@@ -128,52 +122,54 @@ function native_imagery(s::Setup)
     declined = _sentinel_declined(lx, ly, sentinel)
     shifted = copy(declined)
 
-    field = Matrix{Float32}(undef, want)       # the read destination, and the mask's view of the scene
-    filtered = Matrix{Float32}(undef, want)    # `highpass!` needs a destination distinct from its input
-    eroded = Matrix{Bool}(undef, want)         # `_filtered!`'s mask buffer, reused across both scenes
-    keep = trues(want)
-    images = Vector{Matrix{Float32}}()
-
-    for (path, off) in ((s.reference_path, s.pair.reference_offset),
-                        (s.secondary_path, s.pair.secondary_offset))
-        _scene_window!(field, path, off, want)
-        _accumulate_zeros!(declined, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET)
-        _accumulate_zeros!(shifted, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET + 1)
-        AutoRIFT.highpass!(filtered, field, keep, m.width)
-        AutoRIFT._filtered!(filtered, eroded, keep, m.width)
-        # Copied, since `filtered` is reused for the second scene; `bytescale`'s own allocation used to
-        # be what made this copy, incidentally, when quantizing was still the default.
-        push!(images, copy(filtered))
+    rfp, sfp = scene_footprint(s.reference_path), scene_footprint(s.secondary_path)
+    # `ensure_same_projection` warps both scenes or neither: `-tap` can move even the reference's origin.
+    warp = footprint_epsg(rfp) != footprint_epsg(sfp)
+    images = map(((s.reference_path, early, rfp, s.pair.reference_offset),
+                  (s.secondary_path, late, sfp, s.pair.secondary_offset))) do (path, name, fp, off)
+        scene = streamed_scene(c, path, name, fp; warp_to = warp ? (rfp, s.epsg) : nothing)
+        ox, oy = off
+        size(scene, 1) >= oy + want[1] && size(scene, 2) >= ox + want[2] || throw(DimensionMismatch(
+            "the overlap at offset $off does not fit in a $(size(scene)) scene; the crop and the " *
+            "geotransform disagree"))
+        img = scratch!(TileCache(LazyWindow(scene, oy, ox, want); tile = 1024,
+                                 dir = joinpath(CACHE, "scratch"), io = cache_io))
+        fill_tiles!(img)
+        _accumulate_zeros_banded!((declined => NODATA_SAMPLE_OFFSET, shifted => NODATA_SAMPLE_OFFSET + 1),
+                                  img, lx, ly, sentinel)
+        img
     end
     return (images[1], images[2], declined, shifted, m)
 end
 
 """
-    _scene_window!(dest, path, off, want) -> dest
+    streamed_scene(c, path, name, fp; warp_to = nothing) -> AbstractMatrix
 
-The overlap out of one scene, read concurrently into `dest`, in `(row, col)`.
-
-`OpticalDatasets.read_window!` reads chunk-aligned slabs from several tasks at once and converts each as
-it lands, where `_cropped_scene` reads the **whole band** in one blocking request and then copies it
-twice. On a 338 MiB Landsat band over `/vsis3` that is 32.3 s against 54.9 s, and it writes one array
-rather than allocating four.
-
-`off` is `(x, y)`, which is `coregister`'s order; the raster is indexed `(row, col)`, so the two swap
-here.
+The scene `name` at `path` as geogrid and the correlator see it: read from its object, with the native
+filter `process.py` applies to it ([`native_filter`](@ref)), and — when `warp_to` is
+`(reference_footprint, epsg)` — resampled onto the grid `_warp_to` would write. `fp` is the scene's own
+footprint. Lazy throughout except for an `:fft` filter, which is computed whole and held on disk.
 """
-function _scene_window!(dest::AbstractMatrix, path::AbstractString, off::NTuple{2,Int},
-                        want::Tuple{Int,Int})
-    nr, nc = want
-    ox, oy = off
-    r = OpticalDatasets.open_optical(path)
-    try
-        size(r, 1) >= oy + nr && size(r, 2) >= ox + nc || throw(DimensionMismatch(
-            "the overlap at offset $off does not fit in a $(size(r)) scene; the crop and the " *
-            "geotransform disagree"))
-        return OpticalDatasets.read_window!(dest, r, (oy + 1):(oy + nr), (ox + 1):(ox + nc))
-    finally
-        close(r)
-    end
+function streamed_scene(c::GoldenCase, path::AbstractString, name::AbstractString, fp; warp_to = nothing)
+    src = open_scene(path)
+    reverse(fp.size) == size(src) || error(
+        "$name: its geotransform describes $(fp.size) (x, y) but the band is $(size(src)) (row, col)")
+    nf = native_filter(c, name)
+    img = nf === nothing ? src :
+          nf === :wallis_fill ? NativeFiltered(src, AutoRIFT.WallisGapfill(5, 0.25), name) :
+          nf === :fft ? scratch!(fft_filtered(path, name, fp; dir = joinpath(CACHE, "scratch"))) :
+          error("no route for native filter `$nf` on $name")
+    warp_to === nothing && return img
+    reference, epsg = warp_to
+    # A filtered scene is written with no no-data value; the granule's own band carries one.
+    nodata = nf === nothing ? scene_nodata(path) : nothing
+    return WarpedScene(img, fp, warped_footprint(path, reference, epsg); nodata)
+end
+
+# The no-data value of the band at `path`, or `nothing`, read from its header.
+function scene_nodata(path::AbstractString)
+    gdal_network_setup()
+    return ArchGDAL.read(ds -> ArchGDAL.getnodatavalue(ArchGDAL.getband(ds, 1)), path)
 end
 
 # A point outside the image is declined before any scene is read.
@@ -188,26 +184,40 @@ function _sentinel_declined(lx::AbstractMatrix{<:Integer}, ly::AbstractMatrix{<:
     return out
 end
 
-# One scene's contribution: declined wherever it reads zero at a point, or the point samples outside the
-# overlap. Accumulated with `|=` because either scene reading zero is enough.
-function _accumulate_zeros!(out::AbstractMatrix{Bool}, scene::AbstractMatrix,
-                            lx::AbstractMatrix{<:Integer}, ly::AbstractMatrix{<:Integer},
-                            sentinel::Int32, offset::Int)
+"""
+    _accumulate_zeros_banded!(outs, scene, lx, ly, sentinel; rows = 1024) -> outs
+
+One scene's contribution to each no-data mask `out => offset` in `outs`: a grid point is declined where
+the scene reads zero at its location band plus `offset`, or where that sample falls outside the scene.
+Accumulated with `|=`, because either scene reading zero is enough. The scene is read a band of `rows`
+rows at a time, each band once, so the largest array held is one band.
+"""
+function _accumulate_zeros_banded!(outs, scene::AbstractMatrix, lx::AbstractMatrix{<:Integer},
+                                   ly::AbstractMatrix{<:Integer}, sentinel::Int32; rows::Integer = 1024)
     nr, nc = size(scene)
-    Threads.@threads for j in axes(lx, 2)
-        for i in axes(lx, 1)
-            out[i, j] && continue
-            x, y = lx[i, j], ly[i, j]
-            (x == sentinel || y == sentinel) && continue
-            r, c = Int(y) + offset, Int(x) + offset
-            if !(1 <= r <= nr && 1 <= c <= nc)
-                out[i, j] = true
-                continue
+    # Off the scene is declined without a read.
+    for (out, offset) in outs, j in axes(lx, 2), i in axes(lx, 1)
+        x, y = lx[i, j], ly[i, j]
+        (out[i, j] || x == sentinel || y == sentinel) && continue
+        r, c = Int(y) + offset, Int(x) + offset
+        (1 <= r <= nr && 1 <= c <= nc) || (out[i, j] = true)
+    end
+    for r0 in 1:rows:nr
+        band = r0:min(r0 + rows - 1, nr)
+        b = scene[band, 1:nc]
+        for (out, offset) in outs
+            Threads.@threads for j in axes(lx, 2)
+                for i in axes(lx, 1)
+                    x, y = lx[i, j], ly[i, j]
+                    (out[i, j] || x == sentinel || y == sentinel) && continue
+                    r = Int(y) + offset
+                    r in band || continue
+                    iszero(b[r - r0 + 1, Int(x) + offset]) && (out[i, j] = true)
+                end
             end
-            iszero(scene[r, c]) && (out[i, j] = true)
         end
     end
-    return out
+    return outs
 end
 
 # ---------------------------------------------------------------------------
@@ -312,70 +322,50 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    radar_imagery(s::Setup) -> (early, late, declined, declined_shifted, filter)
+    radar_imagery(s::Setup; cache_io = :pread) -> (early, late, declined, declined_shifted, filter)
 
-[`native_imagery`](@ref) for a radar pair: the correlator's two filtered `Float32` images and the
-driver's no-data mask, sourced from [`e2e_imagery`](@ref) (the same mosaic/RSLC/GSLC reader
-`e2e_run.jl` uses, already validated stage by stage against the reference) rather than a GDAL scene
-file. Not quantized to `UInt8`, for the same reason `native_imagery` is not — see its docstring and
-`dev/CORRECTNESS.md` item 4b on `AutoRIFT.jl`.
+[`native_imagery`](@ref) for a radar pair: the correlator's two images, unfiltered by the correlator's
+own filter, and the driver's no-data mask.
+
+**The images are lazy and cached a tile at a time.** They are [`e2e_imagery`](@ref)'s — the reference
+mosaic or RSLC amplitude and the secondary resampled onto it a window at a time (`ResampledMosaic`,
+`ResampledRSLC`), or a GSLC pair's amplitude windows into the two granules — each behind a
+[`TileCache`](@ref), so a tile is resampled or decoded once however many passes read it. No scene-sized
+array is held in memory: a Sentinel-1 mosaic is up to 24043 x 67860 pixels, an RSLC 57760 x 50511 and a
+GSLC overlap 54885 x 110085. The correlator applies `filter` a block at a time — `native_run` passes it
+as `preprocess` and correlates blocked.
 
 **No offset.** An optical pair's two scenes are the raw, uncropped granules, so `native_imagery` crops
 each to the overlap at its own coregistration offset. A radar pair's secondary is instead resampled
-onto the reference's own mosaic or RSLC grid (`ResampledMosaic`/`ResampledRSLC`), so both arrays
-`e2e_imagery` returns already share the geometry's grid and the location bands apply to them with no
-shift.
+onto the reference's own mosaic or RSLC grid, so both arrays share the geometry's grid and the location
+bands apply to them with no shift.
 
-NISAR-L2 (GSLC) has no route here: its band is ~13 billion pixels, and `field`/`filtered`/`eroded` below
-are each a dense array the size of the whole band — about 52 GiB for `filtered` alone at `Float32` — so
-this fails on the materialization itself, not on quantizing it afterward. A memory-bounded, tile-at-a-
-time highpass pass is what GSLC needs and nothing in this package implements yet. Erroring here is
-deliberate rather than attempting an allocation sized for it.
-
-**NISAR-L1 (RSLC) does not share L2's `UInt8`-before-highpass defect.** `rung_bytes`'s skip message
-for NISAR-L2 names the symptom: `loadProduct` hard-casts NISAR to `UInt8` before filtering, so the
-high-pass response's entire negative half saturates to zero and ~30% of the reference's own
-`capture/in_I1` sits at exactly 128. Checked directly against a real NISAR-L1 capture rather than
-assumed: only 2.4% of `in_I1` and 2.9% of `in_I2` sit at 128 — nowhere near that signature — so this
-function's plain `Float32` highpass, the same one the optical and Sentinel-1 paths use, is the right
-one for L1 and needs no `UInt8`-saturating variant.
+**Not quantized to `UInt8`**, for the reason `native_imagery` gives. NISAR-L1 (RSLC) does not share L2's
+`UInt8`-before-highpass defect either: `loadProduct` hard-casts NISAR to `UInt8` before filtering, which
+saturates the high-pass response's negative half and leaves ~30% of an L2 capture's `in_I1` at exactly
+128, but only 2.4% of an L1 capture's `in_I1` and 2.9% of `in_I2` sit there. So the plain `Float32`
+highpass is the right one for every radar case.
 """
-function radar_imagery(s::Setup)
+function radar_imagery(s::Setup; cache_io::Symbol = :pread)
     c = s.case
-    c.platform == "NISAR-L2" && error(
-        "$(basename(c.product)): no memory-bounded highpass pass exists yet for a GSLC's " *
-        "~13-billion-pixel band; see radar_imagery's docstring")
     m = correlator_filter(c)
     m isa AutoRIFT.Highpass || error(
         "no route for radar filter $m on $(basename(c.product)); every radar case reaches " *
         "AutoRIFT.Highpass through correlator_filter today")
-    (ref, sec) = e2e_imagery(s)
-    want = size(ref)
-    size(sec) == want || error("$(basename(c.product)): the reference image is $want and the " *
-                               "secondary $(size(sec)); they are not on the same grid")
-
+    (ref, sec) = e2e_imagery(s; lazy = true)
+    size(ref) == size(sec) || error("$(basename(c.product)): the reference image is $(size(ref)) and " *
+                                    "the secondary $(size(sec)); they are not on the same grid")
     g = s.geometry
     lx, ly = permutedims(g.location_x), permutedims(g.location_y)
     sentinel = Int32(g.nodata.output)
     declined = _sentinel_declined(lx, ly, sentinel)
     shifted = copy(declined)
-
-    filtered = Matrix{Float32}(undef, want)
-    eroded = Matrix{Bool}(undef, want)
-    keep = trues(want)
-    images = Vector{Matrix{Float32}}()
-
-    # Each side is read once through its own range-indexed `getindex` — a plain copy for the dense S1
-    # mosaic, a block-at-a-time resample or HDF5 read for the lazy NISAR-L1/`ResampledMosaic` types —
-    # rather than scalar-indexed, which for the lazy types would resample or decode one pixel at a time.
-    for img in (ref, sec)
-        field = img[axes(img, 1), axes(img, 2)]
-        _accumulate_zeros!(declined, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET)
-        _accumulate_zeros!(shifted, field, lx, ly, sentinel, NODATA_SAMPLE_OFFSET + 1)
-        AutoRIFT.highpass!(filtered, field, keep, m.width)
-        AutoRIFT._filtered!(filtered, eroded, keep, m.width)
-        # Copied, since `filtered` is reused for the second side.
-        push!(images, copy(filtered))
+    images = map((ref, sec)) do img
+        tc = scratch!(TileCache(img; tile = 1024, dir = joinpath(CACHE, "scratch"), io = cache_io))
+        fill_tiles!(tc)
+        _accumulate_zeros_banded!((declined => NODATA_SAMPLE_OFFSET, shifted => NODATA_SAMPLE_OFFSET + 1),
+                                  tc, lx, ly, sentinel)
+        tc
     end
     return (images[1], images[2], declined, shifted, m)
 end
@@ -387,6 +377,8 @@ end
 struct NativeRun
     case::String
     stages::Vector{Pair{String,Float64}}
+    # The highest sampled footprint inside each stage, bytes; empty when the run was not traced.
+    stage_peaks::Vector{Pair{String,Int}}
     peak::Int
     floor::Int
     scene::Tuple{Int,Int}
@@ -404,37 +396,44 @@ end
 total_seconds(r::NativeRun) = sum(last, r.stages)
 
 """
-    native_run(c::GoldenCase; threads, warm, trace, outname) -> (NativeRun, NamedTuple)
+    native_run(c::GoldenCase; warm, trace, cache_io = :pread, filter_tile = 512, outname)
+        -> (NativeRun, NamedTuple)
 
 The chain on one case. The second return value carries the intermediate arrays, for
 `--compare-intermediate`.
+
+`cache_io` is how the scratch tile caches are accessed (`TileCache`'s `io`, `AutoRIFT`'s
+`filter_cache_io`) and `filter_tile` the side of `AutoRIFT.FilterTileCache`'s tiles. `:pread` keeps the
+cached pages out of the process's resident size, which a mapping counts in full: measured on a Sentinel-1
+burst pair, 15 GiB resident against 32 GiB mapped. 512 px filtered tiles keep it as fast as the mapping,
+since a block's read window then spans little more of each tile than it needs; at 1024 px the same run
+correlates 14% slower.
 """
-function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, stream::Bool = false,
-                    outname::AbstractString = "julia_native.nc")
-    # **`stream` is what makes a timing comparable to the container's.** `process.py` builds `/vsis3/`
-    # paths and reads the granule over the network inside its own timed region, so a run that stages the
-    # scenes locally first is measuring less work. Staged is the default because every *other* question
-    # here is about computation; a benchmark against the reference wants this.
-    if stream
-        empty!(STAGED)                          # a prior call's entry would re-route to a local copy
-    else
-        stage(c)                                # the granules locally, before the clock starts
-    end
+function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, cache_io::Symbol = :pread,
+                    filter_tile::Integer = 512, outname::AbstractString = "julia_native.nc")
+    # Every scene is read from its source inside the timed region, as the reference reads it; an entry
+    # left in `STAGED` by another script would re-route a scene to a local copy.
+    empty!(STAGED)
     buf = zeros(UInt64, 64)
     stages = Pair{String,Float64}[]
+    marks = UInt64[]            # the counter at each stage's end, for the per-stage peak
     box = Ref{Any}(nothing)
 
     work = function ()
         local s, p, r, b1, b2, filt, declined, shifted, search, grid, pts
         local cmax, scale, factor, orig, chop, chipx, roi, path
+        empty!(marks)
+        push!(marks, cpu_ticks())
 
-        t = @elapsed s = setup(c)
+        t = @elapsed s = setup(c; lazy_warp = true)
         push!(stages, "geometry" => t)
+        push!(marks, cpu_ticks())
 
         # The no-data mask is accumulated inside the imagery pass, where the unfiltered values live.
-        t = @elapsed (b1, b2, declined, shifted, filt) = radar_sensor(c) ? radar_imagery(s) :
-                                                         native_imagery(s)
+        t = @elapsed (b1, b2, declined, shifted, filt) = radar_sensor(c) ? radar_imagery(s; cache_io) :
+                                                         native_imagery(s; cache_io)
         push!(stages, "imagery" => t)
+        push!(marks, cpu_ticks())
 
         t = @elapsed begin
             cmax = driver_chip_size_max(s, declined)
@@ -442,9 +441,19 @@ function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, strea
             # `chip_size_max` overrides what the extension derives from the geometry alone: a caller's
             # keyword wins over the inner default, which is how the driver's lower, imagery-aware
             # maximum reaches `Params`.
-            p = AutoRIFT.params(s.geometry; threaded = Threads.nthreads() > 1, preprocess = :none,
-                                chip_size_max = (X = cmax, Y = _even_chip(cmax * scale)))
+            # Every pair's images arrive unfiltered (`native_imagery`, `radar_imagery`), so the
+            # correlator filters them; `nothing` is a pair the reference hands the correlator with
+            # only its native filter applied.
+            kw = (; threaded = Threads.nthreads() > 1,
+                  preprocess = filt === nothing ? :none : filt,
+                  chip_size_max = (X = cmax, Y = _even_chip(cmax * scale)))
+            p = AutoRIFT.params(s.geometry; kw...)
             factor = cmax ÷ p.chip_size_min.X
+            # The subpixel ladder is keyed by chip size from the smallest up (`testautoRIFT.py:330-334`),
+            # so a lower maximum drops its coarsest entries: one per level the driver's maximum leaves.
+            nlevels = trailing_zeros(factor) + 1
+            length(p.subpixel) > nlevels &&
+                (p = AutoRIFT.params(s.geometry; kw..., subpixel = p.subpixel[1:nlevels]))
             pts = AutoRIFT.pointset(s.geometry;
                                     pixel_size = ImagePairGeometry.xsize(s.pair.coordinate))
             orig = size(pts.x)
@@ -461,16 +470,40 @@ function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, strea
                                     radius_y = grid.radius_y .* keep)
         end
         push!(stages, "grid" => t)
+        push!(marks, cpu_ticks())
 
-        t = @elapsed r = AutoRIFT.autorift(b2, b1, grid, p)
+        t = @elapsed r = begin
+            # Blocked, so a block's read window is all a task holds, sized to the 512² chunks the
+            # granules are stored in. `filter_tile` is `AutoRIFT.FilterTileCache`'s tile, which keeps
+            # each filtered tile across the passes; that cache holds only a `Highpass` result, so any
+            # other filter is applied afresh to every block.
+            b = AutoRIFT.block_size_for(grid, p, size(b1); chunk = (512, 512))
+            h = AutoRIFT.halo(grid, p, size(b1))
+            # A block's read window is the block grown by the halo on every side.
+            @printf("    blocks %d x %d (X x Y), halo %d x %d, read window %d x %d\n", b.X, b.Y, h.X, h.Y,
+                    b.X + 2h.X, b.Y + 2h.Y)
+            fct = filt isa AutoRIFT.Highpass ? filter_tile : nothing
+            # `wallis_fill` takes its gaps from the pixels reading zero (`np.isclose(image, 0)`), which
+            # AutoRIFT reads from the validity mask rather than from the values.
+            pair = filt isa AutoRIFT.WallisGapfill ?
+                   AutoRIFT.ImagePair(b2, b1; reference_valid = NonzeroMask(b2),
+                                      secondary_valid = NonzeroMask(b1)) :
+                   AutoRIFT.ImagePair(b2, b1)
+            try
+                AutoRIFT.autorift(pair, grid, p, (b.X, b.Y), 0, fct; filter_cache_io = cache_io)
+            finally
+                close_scratch!()
+            end
+        end
         push!(stages, "correlate" => t)
+        push!(marks, cpu_ticks())
 
         t = @elapsed begin
             # Pasted into the pre-chop grid, then dropped wherever the grown mask or a zero search
             # limit says the driver reports nothing (`testautoRIFT.py:806-818`). The second condition
             # is not implied by the first: a point can carry no search range of its own.
             dx = pad_to_orig(r.dx, orig, NaN32)
-            dy = DY_SIGN .* pad_to_orig(r.dy, orig, NaN32)
+            dy = dy_sign(c.platform) .* pad_to_orig(r.dy, orig, NaN32)
             chipx = pad_to_orig(r.chip_size, orig, 0)
             interp = pad_to_orig(Matrix{Bool}(r.interpolated), orig, false)
             drop = grown .| (search .== 0)
@@ -502,6 +535,7 @@ function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, strea
             ItsLiveOffsetProduction.write_product(path, input)
         end
         push!(stages, "package" => t)
+        push!(marks, cpu_ticks())
 
         box[] = (; s, p, r, declined, shifted, grown, search, orig, chop, factor, cmax, scale,
                  roi, chipx, scene = size(b1), path, filt)
@@ -509,23 +543,36 @@ function native_run(c::GoldenCase; warm::Bool = false, trace::Bool = true, strea
     end
 
     if warm
-        work()
+        try
+            work()
+        finally
+            close_scratch!()
+        end
         empty!(stages)
         GC.gc(true); GC.gc(true)
     end
     floor_bytes = last(rusage!(buf))
-    peak = if trace
-        _, tr, _ = with_trace(; interval = 0.05) do
+    stage_peaks = Pair{String,Int}[]
+    peak = try
+        if trace
+            _, tr, _ = with_trace(; interval = 0.05) do
+                work()
+            end
+            for (k, (name, _)) in enumerate(stages)
+                inside = (marks[k] .<= tr.tick .< marks[k + 1])
+                push!(stage_peaks, name => any(inside) ? Int(maximum(tr.footprint[inside])) : 0)
+            end
+            maximum(tr.footprint)
+        else
             work()
+            last(rusage!(buf))
         end
-        maximum(tr.footprint)
-    else
-        work()
-        last(rusage!(buf))
+    finally
+        close_scratch!()
     end
 
     k = box[]
-    r = NativeRun(c.product, stages, Int(peak), Int(floor_bytes), k.scene, k.orig, k.chop,
+    r = NativeRun(c.product, stages, stage_peaks, Int(peak), Int(floor_bytes), k.scene, k.orig, k.chop,
                   k.factor, k.cmax, count(k.declined), count(!iszero, k.search),
                   count(!iszero, k.chipx), k.roi, k.path)
     return (r, k)
@@ -537,8 +584,12 @@ end
 
 function report(r::NativeRun)
     @printf("  %-56s\n", first(r.case, 56))
+    peaks = Dict(r.stage_peaks)
     for (name, secs) in r.stages
-        @printf("    %-12s %8.1f s\n", name, secs)
+        @printf("    %-12s %8.1f s", name, secs)
+        haskey(peaks, name) && (peaks[name] > 0 ? @printf("   peak %6.2f GiB", peaks[name] / 2^30) :
+                                print("   peak not sampled"))
+        println()
     end
     @printf("    %-12s %8.1f s\n", "total", total_seconds(r))
     @printf("    scene %d x %d, grid %d x %d chopped to %d x %d (factor %d, chip max %d)\n",
@@ -632,14 +683,42 @@ function report_product_diff(k, c::GoldenCase, dir::AbstractString; golden::Bool
     return d
 end
 
+# The heap size the collector aims to stay under, GiB. Without one the collector lets the heap grow well
+# past what the run holds live. Measured on NISAR L1, the largest golden case, read from ASF: the footprint
+# peaks at 14.6 GiB at 12 and 16.4 GiB at 14, against a 16 GiB budget; from local granules, 16.4 GiB with
+# no target. 12 costs about 3% in runtime (858 s against 827-849 s from local granules), because the
+# collector runs more often. `0` leaves the collector's own default.
+const HEAP_HINT_GIB = 12.0
+
+"""
+    set_heap_hint!(gib)
+
+Set the collector's heap-size target to `gib` GiB, as `julia --heap-size-hint` does at startup — unless the
+process was started with that flag, which takes precedence. `0` sets nothing.
+"""
+function set_heap_hint!(gib::Real)
+    gib > 0 || return nothing
+    Base.JLOptions().heap_size_hint == 0 || return nothing
+    ccall(:jl_gc_set_max_memory, Cvoid, (UInt64,), round(UInt64, gib * 2^30))
+    return nothing
+end
+
 function main(args)
     isempty(args) && error("usage: julia_e2e.jl <product-fragment> [--compare-intermediate] " *
-                           "[--stream] [--no-golden] [--warm] [--no-trace]")
+                           "[--no-golden] [--warm] [--no-trace] [--cache-io pread|mmap] [--filter-tile N] " *
+                           "[--heap-hint-gib N] [--lattice]")
+    h = findfirst(==("--heap-hint-gib"), args)
+    set_heap_hint!(isnothing(h) ? HEAP_HINT_GIB : parse(Float64, args[h + 1]))
     c = only(cases(first(args)))
+    FORCE_LATTICE[] = "--lattice" in args
     reason = unsupported(c)
     isnothing(reason) || error("$(basename(c.product)): $reason")
-    r, k = native_run(c; warm = "--warm" in args, trace = !("--no-trace" in args),
-                      stream = "--stream" in args)
+    i = findfirst(==("--cache-io"), args)
+    cache_io = isnothing(i) ? :pread : Symbol(args[i + 1])
+    j = findfirst(==("--filter-tile"), args)
+    filter_tile = isnothing(j) ? 512 : parse(Int, args[j + 1])
+    r, k = native_run(c; warm = "--warm" in args, trace = !("--no-trace" in args), cache_io, filter_tile)
+    println("  scratch caches: ", cache_io, ", filtered tiles ", filter_tile, " px")
     report(r)
     dir = resolve_run(c)
     "--compare-intermediate" in args && compare_intermediate(k, dir)

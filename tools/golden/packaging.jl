@@ -29,6 +29,13 @@ const MOTION_COORDINATES = "map"
 # and the other 7.19%. `--compare-intermediate` prints both.
 const DY_SIGN = -1
 
+# The sign `dy` is written with on `platform`. A radar pair's `Dy` is negated once more before packaging
+# (`testautoRIFT.py:785-786`, under `optical_flag == 0`); a NISAR L2 pair runs with `optical_flag = 1`.
+# Measured on NISAR-L1 P094: with `DY_SIGN` alone `va` is the reference's negated (correlation -0.998);
+# with this, `va` agrees to a median of 1 m/yr.
+dy_sign(platform::AbstractString) =
+    (startswith(platform, "S1") || platform == "NISAR-L1") ? -DY_SIGN : DY_SIGN
+
 # ---------------------------------------------------------------------------
 # Metadata, from the scenes' own STAC items
 # ---------------------------------------------------------------------------
@@ -318,21 +325,17 @@ function _nisar_img_pair_info(early::AbstractString, late::AbstractString, id1, 
 end
 
 function nisar_l1_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
-    run = rslc_run(c)
-    run === nothing && error("$(basename(c.product)): no cached run holds both RSLC granules")
     early, late = acquisition_order(c)
-    id1 = open_slc(joinpath(run, early * ".h5")).identification
-    id2 = open_slc(joinpath(run, late * ".h5")).identification
+    id1 = nisar_slc(nisar_granule(c, early)).identification
+    id2 = nisar_slc(nisar_granule(c, late)).identification
     lon, lat = radar_pair_centroid(s)
     return _nisar_img_pair_info(early, late, id1, id2, roi_valid, lon, lat)
 end
 
 function nisar_l2_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
-    run = gslc_run(c)
-    run === nothing && error("$(basename(c.product)): no cached run holds both GSLC granules")
     early, late = acquisition_order(c)
-    id1 = open_geocoded(joinpath(run, early * ".h5")).identification
-    id2 = open_geocoded(joinpath(run, late * ".h5")).identification
+    id1 = nisar_geocoded(nisar_granule(c, early)).identification
+    id2 = nisar_geocoded(nisar_granule(c, late)).identification
     lon, lat = pair_centroid(s.pair.coordinate, s.epsg)
     return _nisar_img_pair_info(early, late, id1, id2, roi_valid, lon, lat)
 end

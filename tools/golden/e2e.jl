@@ -421,18 +421,19 @@ _geogrid(grid, pair, inputs, window, nd, tffactory) =
                          nodata = nodata_from(nd === nothing ? 0.0 : Float64(nd)))
 
 """
-    setup(c::GoldenCase; n = nothing) -> Setup
+    setup(c::GoldenCase; n = nothing, lazy_warp = false) -> Setup
 
 Resolve `c`'s scenes, coregister them, look up the parameter region, and derive the output grid.
 
 `n` names a specific reference run; by default [`resolve_run`](@ref) picks the cached one that holds
-what the rungs need.
+what the rungs need. `lazy_warp` is [`aligned_scenes`](@ref)'s `lazy`: a cross-projection optical pair
+keeps its source paths, and the footprints are the warped grids.
 
 This is the reference's own order of operations: `coregister` first, because geogrid's geotransform
 and size are the *overlap's* rather than either scene's (`testGeogridOptical.py:92-100`), then the
 region lookup on the overlap's centre, then the grid from the region's DEM.
 """
-function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing)
+function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing, lazy_warp::Bool = false)
     run = n === nothing ? resolve_run(c) : run_dir(c, n)
     isdir(run) || error("no reference run at $run; run reference.jl or intermediate.jl first")
 
@@ -448,7 +449,7 @@ function setup(c::GoldenCase; n::Union{Integer,Nothing} = nothing)
         gp, gs = gslc_amplitude_paths(c, run)
         (gp, gs, scene_footprint(gp), scene_footprint(gs))
     else
-        aligned_scenes(c)
+        aligned_scenes(c; lazy = lazy_warp)
     end
     pair = coregister(rfp, sfp; dt = geogrid_seconds(c))
 
@@ -911,14 +912,6 @@ function rung_coregister(s::Setup)
         StageResult("5.2 radar mosaic", "reference.tif", "set", true, 0,
                     "skipped: this run keeps no source product beside its outputs, so a pixel would need \
                      the granule transferred")]
-    # **Metadata is enough for the geometry rungs and not for this one.** `SLCDatasets` parses a zipped
-    # product without unpacking it but refuses a windowed measurement read, since the raster is deflated
-    # inside the archive and its lines are not addressable. So a run holding zips reaches rung 5.0 and is
-    # declined here by acquisition rather than failing the ladder.
-    isdir(products[1]) || return [
-        StageResult("5.2 radar mosaic", "reference.tif", "set", true, 0,
-                    "skipped: $(basename(products[1])) is still zipped, and a measurement raster cannot \
-                     be read a window at a time from the archive. Unpack it beside the outputs")]
     path = joinpath(s.run, "reference.tif")
     isfile(path) || return [StageResult("5.2 radar mosaic", "reference.tif", "set", true, 0,
                                         "skipped: no $path")]
@@ -943,10 +936,6 @@ function rung_coregister(s::Setup)
     end
     sec = joinpath(s.run, "secondary.tif")
     isfile(sec) || return out
-    isdir(products[2]) || return push!(out, StageResult(
-        "5.2 secondary mosaic", "secondary.tif", "set", true, 0,
-        "skipped: $(basename(products[2])) is still zipped, so the secondary's own pixels are not \
-         readable a window at a time"))
     dem = joinpath(s.run, "dem.tif")
     isfile(dem) || return push!(out, StageResult("5.2 secondary mosaic", "secondary.tif", "set", true,
                                                 0, "skipped: no $dem, and the coregistration solves \

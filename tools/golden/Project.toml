@@ -1,7 +1,10 @@
 [deps]
+AWS = "fbe9abb3-538b-5e4e-ba9e-bc94f4f92ebc"
+AWSS3 = "1c724243-ef5b-51ab-93f4-b0a88ac62a95"
 ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
 AutoRIFT = "52cb0ed0-aa80-430c-bd04-c52888a79add"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+ChunkManifests = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 DimensionalData = "0703355e-b756-11e9-17c0-8b28908087d0"
 Downloads = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
@@ -21,15 +24,16 @@ Rasters = "a3a2b9e3-a471-40c9-b274-f788e487c689"
 SLCDatasets = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [sources]
-# Pinned to the tag validated against the Python reference, not `main`: past `v0.1.0`, this
-# package's own development and each dependency's diverge independently.
-AutoRIFT = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
+ChunkManifests = {rev = "main", url = "https://github.com/alex-s-gardner/ChunkManifests.jl"}
 FastGeoProjections = {rev = "main", url = "https://github.com/alex-s-gardner/FastGeoProjections.jl"}
-ImagePairGeometry = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
+ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"}
 ItsLiveOffsetProduction = {path = "../.."}
-OpticalDatasets = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
-SLCDatasets = {rev = "v0.1.0", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
+OpticalDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
+SLCDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
+Zarr = {rev = "complex-int-dtype", url = "https://github.com/alex-s-gardner/Zarr.jl"}
 ZipArchives = {rev = "fix-zip64-version-needed-gate", url = "https://github.com/alex-s-gardner/ZipArchives.jl"}
