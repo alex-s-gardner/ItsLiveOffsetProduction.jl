@@ -82,10 +82,12 @@ convention. `mapping_attrs` carries every CF grid-mapping attribute except `GeoT
 [`write_product`](@ref) always recomputes from whichever grid is actually written — the full grid when
 [`ImagePairInfo`](@ref)'s `roi_valid_percentage` rounds down to `0`, the cropped-and-aligned grid
 otherwise (this is the reference's own criterion, not a fresh check of whether any pixel is valid —
-see `ItsLiveInput`). `lonlat` is called once, on the cropped grid's centroid, to fill in
-`latitude`/`longitude` (skipped, along with cropping itself, in the uncropped case). Neither the
+see `ItsLiveInput`). `lonlat`, any callable `(x, y) -> (lon, lat)`, is called once, on the cropped
+grid's centroid, to fill in `latitude`/`longitude` (skipped, along with cropping itself, in the
+uncropped case). `mapping_attrs` may be given as any dictionary whose values [`attrvalue`](@ref)
+accepts, and is held as a `Dict{String,AttrValue}`. Neither the
 projection parameters nor the coordinate transform are this package's concern — both are supplied by
-the caller, directly or via the `Rasters.Raster`-based constructor in `georef.jl` (see
+the caller, directly or via the `Rasters.Raster`-based constructor the Rasters extension defines (see
 [`cf_grid_mapping`](@ref)).
 
 `pixel_size_x`/`pixel_size_y` are the scene's own pixel size in metres (range/azimuth for radar,
@@ -99,28 +101,20 @@ not a resolution [`write_product`](@ref) resamples to. Cropping only crops and p
 a 120 m grid before calling [`write_product`](@ref). `write` checks the spacing and throws rather than
 silently misaligning the output.
 """
-struct ItsLiveGeoref
+struct ItsLiveGeoref{F}
     x::Vector{Float64}
     y::Vector{Float64}
-    mapping_attrs::Dict{String,Any}
-    lonlat::Function
+    mapping_attrs::Dict{String,AttrValue}
+    lonlat::F
     pixel_size_x::Float64
     pixel_size_y::Float64
+
+    # `mapping_attrs` may be any dictionary whose values `attrvalue` accepts; it is converted here so
+    # that every attribute has a fixed netCDF type when written.
+    ItsLiveGeoref(x, y, mapping_attrs::AbstractDict, lonlat::F, pixel_size_x, pixel_size_y) where {F} =
+        new{F}(x, y, attrdict(mapping_attrs), lonlat, pixel_size_x, pixel_size_y)
 end
 
-"""
-    cf_grid_mapping(crs) -> Dict{String,Any}
-
-The CF grid-mapping attributes GDAL's netCDF writer records for `crs` — everything
-[`ItsLiveGeoref`](@ref)'s `mapping_attrs` needs except `GeoTransform`, which [`write_product`](@ref) always
-recomputes itself. Defined when `Rasters`/`ArchGDAL` are loaded, for `crs` anything
-`GeoFormatTypes.convert`ible to `WellKnownText` — a `Rasters.crs(raster)` result, a
-`GeoFormatTypes.GeoFormat`, or an integer EPSG code. See `georef.jl`.
-
-Supports only the two projections an ITS_LIVE product grid uses, polar stereographic and UTM
-(transverse Mercator); any other throws.
-"""
-function cf_grid_mapping end
 
 """
     ImagePairInfo
@@ -128,11 +122,11 @@ function cf_grid_mapping end
 The per-image-pair metadata the reference calls `IMG_INFO_DICT`.
 
 `mission_img1`/`mission_img2` (`"L"`, `"S"`, or `"N"`) and `satellite_img1`/`satellite_img2` feed the
-`satellite` global attribute. `satellite_img1`/`satellite_img2` are untyped because the reference's own
-`IMG_INFO_DICT` carries them as whatever type the source metadata gives — a string for Landsat/Sentinel
-(`"8"`, `"A"`) but a bare integer for NISAR — and both the type and the value are written through
-verbatim to the per-variable `img_pair_info` attribute; only the derived `satellite` global attribute
-stringifies it. `acquisition_date_img1`/`acquisition_date_img2` feed the computed
+`satellite` global attribute. `satellite_img1`/`satellite_img2` are a `String` or an `Int64` because the
+reference's own `IMG_INFO_DICT` carries them as whatever type the source metadata gives — a string for
+Landsat/Sentinel (`"8"`, `"A"`) but a bare integer for NISAR — and both the type and the value are
+written through verbatim to the per-variable `img_pair_info` attribute; only the derived `satellite`
+global attribute stringifies it. `acquisition_date_img1`/`acquisition_date_img2` feed the computed
 `date_dt`/`date_center` attributes. `latitude`/`longitude` are the pre-crop centroid — [`write_product`](@ref)
 overwrites both after cropping, for every case except the uncropped (`P000`) one. `roi_valid_percentage`
 does double duty beyond being a plain attribute: `write` skips cropping entirely whenever it rounds
@@ -141,9 +135,9 @@ condition, and `process.py` decides whether to crop from that filename, not from
 whether any pixel is valid. The two read differently only at the boundary, but they do: a real captured
 case with 19,994 valid pixels (0.39% of the grid) has `roi_valid_percentage = 0.9`, floors to `0`, and
 the reference leaves it uncropped despite the nonzero count. `extra` carries every other `img_pair_info`
-attribute (`id_img1`, `sensor_img1`, orbit numbers, path/row, and so on) through verbatim; sourcing
-those from raw sensor metadata (SAFE XML, MTL, HDF5, STAC) is outside this
-package.
+attribute (`id_img1`, `sensor_img1`, orbit numbers, path/row, and so on) through verbatim; it may be
+given as any dictionary whose values [`attrvalue`](@ref) accepts. Sourcing those from raw sensor
+metadata (SAFE XML, MTL, HDF5, STAC) is outside this package.
 
 `DateTime` is millisecond-precision, one thousand times coarser than the reference's microsecond
 timestamps; `date_center` therefore loses precision `write` cannot recover. `time` and `date_created`
@@ -155,13 +149,24 @@ struct ImagePairInfo
     acquisition_date_img2::DateTime
     mission_img1::String
     mission_img2::String
-    satellite_img1
-    satellite_img2
+    satellite_img1::Union{String,Int64}
+    satellite_img2::Union{String,Int64}
     roi_valid_percentage::Float64
     latitude::Float64
     longitude::Float64
-    extra::Dict{String,Any}
+    extra::Dict{String,AttrValue}
+
+    function ImagePairInfo(acquisition_date_img1, acquisition_date_img2, mission_img1, mission_img2,
+                           satellite_img1, satellite_img2, roi_valid_percentage, latitude, longitude,
+                           extra::AbstractDict)
+        return new(acquisition_date_img1, acquisition_date_img2, mission_img1, mission_img2,
+                   _satellite(satellite_img1), _satellite(satellite_img2), roi_valid_percentage,
+                   latitude, longitude, attrdict(extra))
+    end
 end
+
+_satellite(x::AbstractString) = String(x)
+_satellite(x::Integer) = Int64(x)
 
 """
     roi_valid_percentage(chip_size_x, search_limit_x) -> Float64
@@ -245,7 +250,7 @@ Not included, and not computed here:
     read — see the comments in `write.jl`) rather than deriving it from
     anything in a run — `write_product` hardcodes the same constants.
 """
-struct ItsLiveInput
+struct ItsLiveInput{F}
     pair_type::Symbol
     detection_method::String
     coordinates::String
@@ -254,7 +259,7 @@ struct ItsLiveInput
     source::String
     dt_seconds::Union{Float64,Nothing}
 
-    georef::ItsLiveGeoref
+    georef::ItsLiveGeoref{F}
     img_pair_info::ImagePairInfo
     coefficients::GeogridCoefficients
     reference::ReferenceVelocity
@@ -267,6 +272,15 @@ struct ItsLiveInput
     scale_chip_size_y::Float64
     interp_mask::Matrix{Bool}
 end
+
+# Every argument converted to its field's type — a `BitMatrix` mask to `Matrix{Bool}`, say — with `F`
+# taken from `georef`.
+ItsLiveInput(pair_type, detection_method, coordinates, autorift_software_version, parameter_file,
+             source, dt_seconds, georef::ItsLiveGeoref{F}, img_pair_info, coefficients, reference,
+             stable_mask, swath_bias, dx, dy, chip_size_x, scale_chip_size_y, interp_mask) where {F} =
+    ItsLiveInput{F}(pair_type, detection_method, coordinates, autorift_software_version, parameter_file,
+                    source, dt_seconds, georef, img_pair_info, coefficients, reference, stable_mask,
+                    swath_bias, dx, dy, chip_size_x, scale_chip_size_y, interp_mask)
 
 """
     write_product(path, input::ItsLiveInput)

@@ -9,34 +9,34 @@ naming, swath offset bias, the stable-shift correction, and three netCDF schemas
 owns all of it. [`write_product`](@ref) is the entry point; everything else exists to build the
 [`ItsLiveInput`](@ref) it takes.
 
-Every dependency is a hard dependency. The netCDF writer, the geogrid repackaging and the CF grid
-mapping are all needed on every run, so there is nothing for a package extension to defer.
+The netCDF writer calls the netCDF C library and the CF grid mapping GDAL's OSR API directly, so a
+product can be written from a program compiled with `juliac --trim`. An `ItsLiveGeoref` built from a
+`Rasters.Raster` is defined when Rasters, DimensionalData and ArchGDAL are loaded.
 """
 module ItsLiveOffsetProduction
 
-using Base.ScopedValues: ScopedValue, with
 using Dates: Dates, DateTime
 using Statistics: median, quantile, std
 
-import ArchGDAL
 import AutoRIFT
-import DimensionalData
+import GDAL
 import GeoFormatTypes
 import ImagePairGeometry
-import NCDatasets
-import Rasters
 
 export GeogridCoefficients, ReferenceVelocity, ItsLiveGeoref, ImagePairInfo, ItsLiveInput,
        SwathOffsetBias
 export write_product, roi_valid_percentage, cf_grid_mapping
+export AttrValue
 # `coefficients`, `reference_velocity` and `image_location` are deliberately not exported: the names are
 # generic enough to collide in a caller's namespace, and each is called once per run.
 
+# The netCDF-4 writer, and the attribute value types it writes.
+include("netcdf.jl")
 # Types and the function declarations their methods attach to.
 include("types.jl")
 # `PairGeometry`/`GeometryInputs` to the structs above.
 include("geogrid.jl")
-# CF grid-mapping attributes, and an `ItsLiveGeoref` from a `Raster`.
+# CF grid-mapping attributes.
 include("georef.jl")
 # Velocity, stable-shift correction, error estimates, and the netCDF itself.
 include("write.jl")
@@ -61,13 +61,13 @@ using PrecompileTools: @setup_workload, @compile_workload
     nx, ny = 50, 30
     x = collect(0.0:120.0:(120.0 * (nx - 1)))
     y = collect(reverse(0.0:120.0:(120.0 * (ny - 1)))) .+ 1.0e6
-    mapping = Dict{String,Any}("grid_mapping_name" => "polar_stereographic",
-                               "spatial_epsg" => Int64(3413))
+    mapping = Dict{String,AttrValue}("grid_mapping_name" => "polar_stereographic",
+                                     "spatial_epsg" => Int64(3413))
     # A plain function rather than a closure over a projection: the workload must not need `Proj`.
     lonlat(px, py) = (-45.0, 70.0)
     georef = ItsLiveGeoref(x, y, mapping, lonlat, 30.0, 30.0)
     info = ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "L", "L", "8", "8",
-                         80.0, 70.0, -45.0, Dict{String,Any}())
+                         80.0, 70.0, -45.0, Dict{String,AttrValue}())
     refv = ReferenceVelocity(zeros(Float32, ny, nx), zeros(Float32, ny, nx))
     dx = fill(6.0f0, ny, nx)
     dy = fill(-2.0f0, ny, nx)

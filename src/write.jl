@@ -79,9 +79,20 @@ const DR_TO_VR_FACTOR_DESCRIPTION = "multiplicative factor that converts slant r
 # Small numeric helpers.
 # ---------------------------------------------------------------------------
 
+# `Statistics.median` of a vector holding no NaN: the same order statistic and the same `middle`
+# arithmetic, so the same bits. Written here because `Statistics.median!`'s empty-input message prints
+# the vector, which a `--trim`med program cannot.
+function _median_nonan(v::AbstractVector{T}) where {T<:AbstractFloat}
+    isempty(v) && throw(ArgumentError("median of an empty array is undefined"))
+    s = sort(v)
+    n = length(s)
+    mid = div(1 + n, 2)
+    return isodd(n) ? s[mid] : s[mid] / 2 + s[mid + 1] / 2
+end
+
 function _finite_median(x)
     v = filter(!isnan, vec(x))
-    return isempty(v) ? NaN : median(v)
+    return isempty(v) ? NaN : _median_nonan(v)
 end
 
 # Only ever read when `mask` is known (by the caller) to intersect a finite region — the reference
@@ -90,7 +101,7 @@ end
 function _median_over_mask(diff::AbstractArray, mask::AbstractArray{Bool})
     v = diff[mask]
     v = filter(!isnan, v)
-    return isempty(v) ? 0.0 : median(v)
+    return isempty(v) ? 0.0 : _median_nonan(v)
 end
 
 function _std_over_mask(diff::AbstractArray, mask::AbstractArray{Bool})
@@ -182,8 +193,12 @@ function _rotate_vel2radar(loc_x::AbstractMatrix{Float64}, loc_y::AbstractMatrix
     foreach(_interpolate_row!, eachrow(coarse_x))
     foreach(_interpolate_row!, eachrow(coarse_y))
 
+    # Shapes checked here rather than by a multi-array `eachindex`, whose mismatch message is built by a
+    # call a `--trim`med program cannot make.
+    size(loc_x) == size(loc_y) == size(vel_x) == size(vel_y) || throw(DimensionMismatch(
+        "the swath offset bias correction needs location and velocity on one grid"))
     out_x, out_y = copy(vel_x), copy(vel_y)
-    for idx in eachindex(loc_x, loc_y, vel_x, vel_y)
+    for idx in eachindex(loc_x)
         lx, ly = loc_x[idx], loc_y[idx]
         (isnan(lx) || isnan(ly)) && continue
         r, c = nearest(y_grid, ly), nearest(x_grid, lx)
@@ -289,12 +304,14 @@ function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{F
     dy_mean_shift1 = stable_count1 != 0 ? _median_over_mask(dy .- dyref, ssm1) : 0.0
 
     stable_shift_applied = stable_count != 0 ? 1 : (stable_count1 != 0 ? 2 : 0)
+    # `Float64` on every branch: a corrected offset is `Float64`, and the uncorrected one converts
+    # exactly — it is promoted to `Float64` by the velocity conversion below in any case.
     dxc, dyc = if stable_shift_applied == 1
         dx .- dx_mean_shift, dy .- dy_mean_shift
     elseif stable_shift_applied == 2
         dx .- dx_mean_shift1, dy .- dy_mean_shift1
     else
-        dx, dy
+        Float64.(dx), Float64.(dy)
     end
 
     vx = Float32.(coeffs.offset2vx_1 .* (dxc .* coeffs.scale_factor_1) .+
@@ -314,15 +331,16 @@ end
 # simplification made here.
 # ---------------------------------------------------------------------------
 
+_error_modeled(error_model::NamedTuple, date_dt_days::Float64) =
+    (error_model.slope * date_dt_days + error_model.intercept) / date_dt_days * 365
+_error_modeled(error_model::Real, date_dt_days::Float64) = error_model / date_dt_days * 365
+
+# `error_modeled` is `_error_modeled(error_model, date_dt_days)`, computed by the caller so that this
+# method is compiled for the types of the two mean shifts alone.
 function _error_family(comp, compref, ssm, ssm1, stable_count, stable_count1, stable_shift_applied,
-                        mean_shift, mean_shift1, error_model, date_dt_days)
+                        mean_shift, mean_shift1, error_modeled::Float64)
     error_stationary = stable_count != 0 ? _std_over_mask(comp .- compref, ssm) : NaN
     error_slow = stable_count1 != 0 ? _std_over_mask(comp .- compref, ssm1) : NaN
-    error_modeled = if error_model isa NamedTuple
-        (error_model.slope * date_dt_days + error_model.intercept) / date_dt_days * 365
-    else
-        error_model / date_dt_days * 365
-    end
     error = stable_shift_applied == 1 ? error_stationary :
             stable_shift_applied == 2 ? error_slow : error_modeled
     # The reference's `else` branch is the bare Python literal `0` (`netcdf_output.py:633` etc.), not
@@ -332,8 +350,45 @@ function _error_family(comp, compref, ssm, ssm1, stable_count, stable_count1, st
                    stable_shift_applied == 1 ? mean_shift : 0
     stable_shift_stationary = stable_count != 0 ? mean_shift : NaN
     stable_shift_slow = stable_count1 != 0 ? mean_shift1 : NaN
-    return (; error, error_stationary, error_modeled, error_slow,
-            stable_shift, stable_shift_stationary, stable_shift_slow)
+    return _ErrorStats(error, error_stationary, error_modeled, error_slow,
+                       stable_shift, stable_shift_stationary, stable_shift_slow)
+end
+
+# One component's error/stable-shift attributes. Each holds the type the reference writes for it,
+# which depends on the data — a `Float32` statistic, a `Float64` `NaN` or model value, an `Int64` `0` —
+# so the fields are small unions and the struct itself one concrete type.
+struct _ErrorStats
+    error::Union{Float32,Float64}
+    error_stationary::Union{Float32,Float64}
+    error_modeled::Float64
+    error_slow::Union{Float32,Float64}
+    stable_shift::Union{Float32,Float64,Int64}
+    stable_shift_stationary::Union{Float32,Float64}
+    stable_shift_slow::Union{Float32,Float64}
+end
+
+# The arrays and values `_write_file!` writes, on the grid it writes them on. The radar-only fields are
+# `nothing` on an optical pair.
+struct _ProductData
+    x::Vector{Float64}
+    y::Vector{Float64}
+    vx::Matrix{Float32}
+    vy::Matrix{Float32}
+    v::Matrix{Float32}
+    V_error::Union{Matrix{Float32},Matrix{Float64}}
+    vr::Union{Nothing,Matrix{Float32}}
+    va::Union{Nothing,Matrix{Float32}}
+    m11::Union{Nothing,Matrix{Float32}}
+    m12::Union{Nothing,Matrix{Float32}}
+    dr_to_vr_factor::Union{Nothing,Float64}
+    chip_size_width::Matrix{Float64}
+    chip_size_height::Matrix{Float64}
+    interp_mask::Matrix{Bool}
+    nodata::Matrix{Bool}
+    vx_stats::_ErrorStats
+    vy_stats::_ErrorStats
+    vr_stats::Union{Nothing,_ErrorStats}
+    va_stats::Union{Nothing,_ErrorStats}
 end
 
 # The per-component "mean shift as a velocity", `netcdf_output.py:270-288,309-319`: for vx/vy this is
@@ -429,78 +484,50 @@ _fill_f32(data::AbstractArray{<:AbstractFloat}, nodata) = ifelse.(nodata, NODATA
 # netCDF plumbing.
 # ---------------------------------------------------------------------------
 
-# Whether `_setattr!` forces a string attribute to `NC_STRING`, scoped around one `_write_file!`
-# call by `_with_netcdf_create` so concurrent `write_product` calls on different tasks cannot race.
-#
 # The reference writes a cropped product's string attributes as `NC_STRING` (confirmed against a
 # real product's `ncdump -h`: `string x:standard_name = "..."`) but the uncropped (`P000`) product's
 # as `NC_CHAR` — confirmed against both a real cropped and a real uncropped product. `netCDF_packaging`
 # writes both with the plain Python `netCDF4` library, which defaults to `NC_CHAR`; only the cropped
 # path's extra reopen-and-patch in `crop.py` goes through `xarray`, which is where the upgrade to
 # `NC_STRING` happens. So this package's own on-disk type has to track the same cropped/uncropped
-# split, not pick one unconditionally.
-const _FORCE_NC_STRING = ScopedValue(false)
+# split, not pick one unconditionally: the file is opened with `nc_string = cropped`.
+#
+# Every value is written as its own type: an `Int64` as `NC_INT64`, a `Float32` as `NC_FLOAT`.
+_setattr!(v::NcVar, key::String, val) = put_att!(v, key, val)
+_setattr!(f::NcFile, key::String, val) = put_att!(_globals(f), key, val)
 
-# NCDatasets matches `NC_STRING` only when the value is wrapped in a one-element `Vector{String}`
-# (its own `defAttrib` docstring) — a bare `String` writes `NC_CHAR` instead. `Int64` goes through
-# `nc_put_att` directly with `NC_INT64`, since the plain `x.attrib[key] = val` path narrows a bare
-# `Int64` to `Int32`.
-function _setattr!(x, key, val)
-    if val isa Int64 && hasproperty(x, :var)
-        raw = x.var
-        NCDatasets.nc_put_att(raw.ds.ncid, raw.varid, key, NCDatasets.NC_INT64, Int64[val])
-    elseif val isa AbstractString && _FORCE_NC_STRING[]
-        x.attrib[key] = [val]
-    else
-        x.attrib[key] = val
-    end
-    return x
-end
-
-# Opens `path` for writing with `_FORCE_NC_STRING` scoped to `cropped`, so every `_setattr!` call
-# `f` makes sees the on-disk string type the reference itself would use for this product's schema.
-function _with_netcdf_create(f, path::AbstractString, cropped::Bool)
-    with(_FORCE_NC_STRING => cropped) do
-        NCDatasets.NCDataset(path, "c") do ds
-            f(ds)
-        end
-    end
-end
-
-# `data` is (y, x) — AutoRIFT's own convention. NCDatasets keeps a netCDF `(y,x)` variable's Julia-side
-# dims as `(x,y)` (memory layout, not index order; verified against a round-trip `ncdump -h`), so
-# every write here transposes.
-function _put!(v, data::AbstractMatrix)
+# `data` is (y, x) — AutoRIFT's own convention — and its transpose is the netCDF `(y, x)` layout. A
+# cropped product's variables carry a leading `time` dimension of one record.
+function _put!(v::NcVar, data::AbstractMatrix, cropped::Bool)
     arr = permutedims(data)
-    if ndims(v) == 3
-        v[:, :, 1] = arr
-    else
-        v[:, :] = arr
-    end
-    return v
+    nx, ny = size(arr)
+    return cropped ? put_var!(v, arr; start = (0, 0, 0), count = (1, ny, nx)) :
+           put_var!(v, arr; start = (0, 0), count = (ny, nx))
 end
 
-function _defvar_scalar!(ds, name, fillvalue, attrs, dimnames = ())
-    v = NCDatasets.defVar(ds, name, typeof(fillvalue), dimnames; fillvalue)
+function _defvar_scalar!(f::NcFile, name::String, fillvalue::T, attrs::Dict{String,AttrValue},
+                         dims::Tuple{Vararg{String}} = ()) where {T}
+    v = def_var!(f, name, T, dims; fillvalue)
     for (k, val) in attrs
-        _setattr!(v, k, val)
+        put_attvalue!(v, k, val)
     end
     return v
 end
 
-function _defvar_coord!(ds, name, data, standard_name, description; fillvalue = nothing)
-    v = NCDatasets.defVar(ds, name, Float64, (name,); fillvalue)
+function _defvar_coord!(f::NcFile, name::String, data::AbstractVector{Float64}, standard_name::String,
+                        description::String; fillvalue::Union{Float64,Nothing} = nothing)
+    v = def_var!(f, name, Float64, (name,); fillvalue)
     _setattr!(v, "standard_name", standard_name)
     _setattr!(v, "description", description)
     _setattr!(v, "units", "m")
-    v[:] = data
+    put_var!(v, collect(data); start = (0,), count = (length(data),))
     return v
 end
 
-function _defvar_2d!(ds, name, ::Type{T}, fillvalue, dimnames, chunksizes) where {T}
-    return NCDatasets.defVar(ds, name, T, dimnames; fillvalue = T(fillvalue),
-                              deflatelevel = 2, shuffle = true, chunksizes)
-end
+# `dims` and `chunks` in netCDF order, slowest first.
+_defvar_2d!(f::NcFile, name::String, ::Type{T}, fillvalue, dims::Vector{String},
+            chunks::Vector{Int}) where {T} =
+    def_var!(f, name, T, dims; fillvalue = T(fillvalue), chunks, deflate = 2, shuffle = true)
 
 _round1(x::Integer) = x
 _round1(x::AbstractFloat) = isnan(x) ? x : round(x; digits = 1)
@@ -584,31 +611,48 @@ function _date_dt_center(d0::DateTime, d1::DateTime)
     return date_dt, date_center
 end
 
-_format_date(dt::DateTime) = Dates.format(dt, "yyyymmddTHH:MM:SS.sss")
+# `Dates.format(dt, dateformat"yyyymmddTHH:MM:SS.sss")`, written field by field: `Dates.format` pads
+# with `lpad`, which measures `textwidth` and so cannot be compiled by `juliac --trim`.
+_format_date(dt::DateTime) =
+    string(Dates.year(dt); pad = 4) * string(Dates.month(dt); pad = 2) * string(Dates.day(dt); pad = 2) *
+    "T" * string(Dates.hour(dt); pad = 2) * ":" * string(Dates.minute(dt); pad = 2) * ":" *
+    string(Dates.second(dt); pad = 2) * "." * string(Dates.millisecond(dt); pad = 3)
+
+const _MONTH_ABBREVIATIONS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                              "Dec")
+
+# `Dates.format(dt, dateformat"dd-u-yyyy HH:MM:SS")` in the English locale, field by field for the
+# reason `_format_date` gives.
+_format_created(dt::DateTime) =
+    string(Dates.day(dt); pad = 2) * "-" * _MONTH_ABBREVIATIONS[Dates.month(dt)] * "-" *
+    string(Dates.year(dt); pad = 4) * " " * string(Dates.hour(dt); pad = 2) * ":" *
+    string(Dates.minute(dt); pad = 2) * ":" * string(Dates.second(dt); pad = 2)
 
 # Landsat and Sentinel-2 both format `acquisition_date_img1`/`img2` the same way as `date_center` —
 # `strftime(...).rstrip('0')` (`testautoRIFT.py:1527-1528` (S2), and the equivalent in the Landsat
 # branch) — confirmed against a real captured `IMG_INFO_DICT`, not assumed. Sentinel-1's are sourced
 # from a pre-formatted metadata string instead and may not follow this rule; unconfirmed against a
 # real capture, since only an optical case has been checked so far.
-_format_date_stripped(dt::DateTime) = rstrip(_format_date(dt), '0')
+_format_date_stripped(dt::DateTime) = String(rstrip(_format_date(dt), '0'))
 
-function _img_pair_info_attrs(info::ImagePairInfo, date_dt, date_center_str)
-    d = Dict{String,Any}(
-        "acquisition_date_img1" => _format_date_stripped(info.acquisition_date_img1),
-        "acquisition_date_img2" => _format_date_stripped(info.acquisition_date_img2),
-        "mission_img1" => info.mission_img1,
-        "mission_img2" => info.mission_img2,
-        "satellite_img1" => info.satellite_img1,
-        "satellite_img2" => info.satellite_img2,
-        "time_standard_img1" => "UTC",
-        "time_standard_img2" => "UTC",
-        "date_center" => date_center_str,
-        "date_dt" => date_dt,
-        "latitude" => info.latitude,
-        "longitude" => info.longitude,
-        "roi_valid_percentage" => info.roi_valid_percentage,
-    )
+# Entry by entry rather than through `Dict(pairs...)`, whose thirteen differently typed pairs are a
+# `Vararg{Any}` call a `--trim`med program cannot make. Sized first, as that constructor sizes it, so
+# the attributes iterate — and are written — in the same order.
+function _img_pair_info_attrs(info::ImagePairInfo, date_dt::Float64, date_center_str::String)
+    d = sizehint!(Dict{String,AttrValue}(), 13)
+    d["acquisition_date_img1"] = _format_date_stripped(info.acquisition_date_img1)
+    d["acquisition_date_img2"] = _format_date_stripped(info.acquisition_date_img2)
+    d["mission_img1"] = info.mission_img1
+    d["mission_img2"] = info.mission_img2
+    d["satellite_img1"] = info.satellite_img1
+    d["satellite_img2"] = info.satellite_img2
+    d["time_standard_img1"] = "UTC"
+    d["time_standard_img2"] = "UTC"
+    d["date_center"] = date_center_str
+    d["date_dt"] = date_dt
+    d["latitude"] = info.latitude
+    d["longitude"] = info.longitude
+    d["roi_valid_percentage"] = info.roi_valid_percentage
     merge!(d, info.extra)
     return d
 end
@@ -652,7 +696,7 @@ function write_product(path::AbstractString, input::ItsLiveInput)
 
     shift = _stable_shift_correct(dx, dy, coeffs, input.reference, input.stable_mask)
     vx, vy = shift.vx, shift.vy
-    v = sqrt.(vx .^ 2 .+ vy .^ 2)
+    v = _speed(vx, vy)
     nodata = isnan.(vx) .| isnan.(vy)
 
     date_dt, date_center_dt = _date_dt_center(input.img_pair_info.acquisition_date_img1,
@@ -676,13 +720,12 @@ function write_product(path::AbstractString, input::ItsLiveInput)
     vx_error_model = is_radar ? ERROR_VECTOR_RADAR.vx : ERROR_VECTOR_OPTICAL.vx
     vy_error_model = is_radar ? ERROR_VECTOR_RADAR.vy : ERROR_VECTOR_OPTICAL.vy
     vx_stats = _error_family(vx, vxref, ssm, ssm1, stable_count, stable_count1, applied,
-                              vx_mean_shift, vx_mean_shift1, vx_error_model, date_dt)
+                              vx_mean_shift, vx_mean_shift1, _error_modeled(vx_error_model, date_dt))
     vy_stats = _error_family(vy, vyref, ssm, ssm1, stable_count, stable_count1, applied,
-                              vy_mean_shift, vy_mean_shift1, vy_error_model, date_dt)
+                              vy_mean_shift, vy_mean_shift1, _error_modeled(vy_error_model, date_dt))
 
     v_error_scalar = _v_error_monte_carlo(vx_stats.error, vy_stats.error)
-    V_error = sqrt.((vx_stats.error .* vx ./ v) .^ 2 .+ (vy_stats.error .* vy ./ v) .^ 2)
-    V_error[v .== 0] .= v_error_scalar
+    V_error = _v_error(vx_stats.error, vy_stats.error, vx, vy, v, v_error_scalar)
 
     vr = va = m11 = m12 = nothing
     dr_to_vr_factor = nothing
@@ -691,28 +734,31 @@ function write_product(path::AbstractString, input::ItsLiveInput)
     if is_radar
         # `netcdf_output.py` explicitly casts `VRref`/`VAref` to float32 (`VRref = VRref.astype(np.float32)`)
         # even though `DXref`/`DYref`/`offset2vr` are float64 — confirmed against a real capture.
-        vrref = Float32.(shift.dxref .* coeffs.offset2vr)
-        varef = Float32.(shift.dyref .* coeffs.offset2va)
-        vr = Float32.(shift.dxc .* coeffs.offset2vr)
-        va = Float32.(shift.dyc .* coeffs.offset2va)
+        # Present on a radar pair, as checked above.
+        offset2vr = coeffs.offset2vr::Matrix{Float64}
+        offset2va = coeffs.offset2va::Matrix{Float64}
+        vrref = Float32.(shift.dxref .* offset2vr)
+        varef = Float32.(shift.dyref .* offset2va)
+        vr = Float32.(shift.dxc .* offset2vr)
+        va = Float32.(shift.dyc .* offset2va)
 
-        vr_mean_shift = _radar_mean_shift(coeffs.offset2vr, shift.dx_mean_shift)
-        va_mean_shift = _radar_mean_shift(coeffs.offset2va, shift.dy_mean_shift)
-        vr_mean_shift1 = _radar_mean_shift(coeffs.offset2vr, shift.dx_mean_shift1)
-        va_mean_shift1 = _radar_mean_shift(coeffs.offset2va, shift.dy_mean_shift1)
+        vr_mean_shift = _radar_mean_shift(offset2vr, shift.dx_mean_shift)
+        va_mean_shift = _radar_mean_shift(offset2va, shift.dy_mean_shift)
+        vr_mean_shift1 = _radar_mean_shift(offset2vr, shift.dx_mean_shift1)
+        va_mean_shift1 = _radar_mean_shift(offset2va, shift.dy_mean_shift1)
 
         vr_stats = _error_family(vr, vrref, ssm, ssm1, stable_count, stable_count1, applied,
-                                  vr_mean_shift, vr_mean_shift1, ERROR_VECTOR_RADAR.vr, date_dt)
+                                  vr_mean_shift, vr_mean_shift1, _error_modeled(ERROR_VECTOR_RADAR.vr, date_dt))
         va_stats = _error_family(va, varef, ssm, ssm1, stable_count, stable_count1, applied,
-                                  va_mean_shift, va_mean_shift1, ERROR_VECTOR_RADAR.va, date_dt)
+                                  va_mean_shift, va_mean_shift1, _error_modeled(ERROR_VECTOR_RADAR.va, date_dt))
 
-        dr_to_vr_factor = _finite_median(coeffs.offset2vr)
+        dr_to_vr_factor = _finite_median(offset2vr)
         denom = coeffs.offset2vx_1 .* coeffs.offset2vy_2 .- coeffs.offset2vx_2 .* coeffs.offset2vy_1
         m11 = Float32.(coeffs.offset2vy_2 ./ denom ./ coeffs.scale_factor_1)
         m12 = Float32.(.-coeffs.offset2vx_2 ./ denom ./ coeffs.scale_factor_1)
 
         seconds_per_year = 365.0 * 24.0 * 3600.0
-        pixel_size_y = _finite_median(coeffs.offset2va) * input.dt_seconds / seconds_per_year
+        pixel_size_y = _finite_median(offset2va) * (input.dt_seconds::Float64) / seconds_per_year
     end
 
     # --- chip sizes and interpolation mask, in metres/final form, nodata-zeroed ---
@@ -736,10 +782,11 @@ function write_product(path::AbstractString, input::ItsLiveInput)
     mapping_dict = copy(input.georef.mapping_attrs)
 
     if align === nothing
-        _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m11, m12, dr_to_vr_factor,
-                     chip_size_width, chip_size_height, interp_mask, nodata,
-                     vx_stats, vy_stats, vr_stats, va_stats, applied, stable_count, stable_count1,
-                     pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, nothing)
+        data = _ProductData(x, y, vx, vy, v, V_error, vr, va, m11, m12, dr_to_vr_factor,
+                            chip_size_width, chip_size_height, interp_mask, nodata,
+                            vx_stats, vy_stats, vr_stats, va_stats)
+        _write_file!(path, input, is_radar, data, applied, stable_count, stable_count1,
+                     pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, false)
     else
         vxc = _crop_pad(vx, align, NaN32); vyc = _crop_pad(vy, align, NaN32)
         vcc = _crop_pad(v, align, NaN32); vec_ = _crop_pad(V_error, align, NaN32)
@@ -758,12 +805,49 @@ function write_product(path::AbstractString, input::ItsLiveInput)
         img_pair_info_dict["latitude"] = round(lat; digits = 2)
         img_pair_info_dict["longitude"] = round(lon; digits = 2)
 
-        _write_file!(path, input, is_radar, align.xa, align.ya, vxc, vyc, vcc, vec_, vrc, vac, m11c, m12c,
-                     dr_to_vr_factor, cszw, cszh, imask, nodatac,
-                     vx_stats, vy_stats, vr_stats, va_stats, applied, stable_count, stable_count1,
-                     pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, align)
+        data = _ProductData(collect(align.xa), collect(align.ya), vxc, vyc, vcc, vec_, vrc, vac, m11c,
+                            m12c, dr_to_vr_factor, cszw, cszh, imask, nodatac,
+                            vx_stats, vy_stats, vr_stats, va_stats)
+        _write_file!(path, input, is_radar, data, applied, stable_count, stable_count1,
+                     pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, true)
     end
     return path
+end
+
+# The 2-D variables' dimensions and chunk sizes, in netCDF order, and the grid's cell size.
+function _layout(x::Vector{Float64}, y::Vector{Float64}, cropped::Bool)
+    ny, nx = length(y), length(x)
+    cropped && return (String["time", "y", "x"], Int[1, CHUNK_SIZE, CHUNK_SIZE], x[2] - x[1], y[2] - y[1])
+    chunk_lines = round(Int, min(ceil(8192 / ny) * 128, ny))
+    return (String["y", "x"], Int[chunk_lines, nx], length(x) > 1 ? x[2] - x[1] : PIXEL_SIZE,
+            length(y) > 1 ? y[2] - y[1] : -PIXEL_SIZE)
+end
+
+# `sqrt.(vx .^ 2 .+ vy .^ 2)`, element by element. The loops here and in `_v_error` are the broadcasts
+# they replace written out, in the same order of operations: fused, those broadcasts nest deeply
+# enough that inference widens their type, and every use after it becomes a run-time dispatch.
+function _speed(vx::Matrix{T}, vy::Matrix{T}) where {T}
+    size(vx) == size(vy) || throw(DimensionMismatch("vx and vy must share one grid"))
+    v = similar(vx)
+    for i in eachindex(v)
+        v[i] = sqrt(vx[i]^2 + vy[i]^2)
+    end
+    return v
+end
+
+# `sqrt.((ex .* vx ./ v) .^ 2 .+ (ey .* vy ./ v) .^ 2)`, set to `fill` wherever `v` is zero, with the
+# element type that broadcast would give it.
+function _v_error(ex::Real, ey::Real, vx::Matrix, vy::Matrix, v::Matrix, fill::Real)
+    size(vx) == size(vy) == size(v) || throw(DimensionMismatch("vx, vy and v must share one grid"))
+    T = float(promote_type(typeof(ex), typeof(ey), eltype(vx), eltype(vy), eltype(v)))
+    out = Matrix{T}(undef, size(v))
+    for i in eachindex(out)
+        out[i] = sqrt((ex * vx[i] / v[i])^2 + (ey * vy[i] / v[i])^2)
+    end
+    for i in eachindex(out)
+        v[i] == 0 && (out[i] = fill)
+    end
+    return out
 end
 
 function _v_error_monte_carlo(vx_error, vy_error; n = 1_000_000)
@@ -772,25 +856,19 @@ function _v_error_monte_carlo(vx_error, vy_error; n = 1_000_000)
     return std(sqrt.(vx_samples .^ 2 .+ vy_samples .^ 2))
 end
 
-function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m11, m12, dr_to_vr_factor,
-                       chip_size_width, chip_size_height, interp_mask, nodata,
-                       vx_stats, vy_stats, vr_stats, va_stats, stable_shift_applied,
-                       stable_count, stable_count1, pixel_size_y,
-                       img_pair_info_dict, mapping_dict, date_center_dt, align)
-    cropped = align !== nothing
+function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool, d::_ProductData,
+                       stable_shift_applied::Int, stable_count::Int, stable_count1::Int,
+                       pixel_size_y::Float64, img_pair_info_dict::Dict{String,AttrValue},
+                       mapping_dict::Dict{String,AttrValue}, date_center_dt::DateTime, cropped::Bool)
+    x, y = d.x, d.y
+    vx, vy, v, V_error, nodata = d.vx, d.vy, d.v, d.V_error, d.nodata
+    vx_stats, vy_stats = d.vx_stats, d.vy_stats
+    chip_size_width, chip_size_height, interp_mask = d.chip_size_width, d.chip_size_height, d.interp_mask
     ny, nx = length(y), length(x)
 
-    if cropped
-        dims2 = ("x", "y", "time")
-        chunks2 = (CHUNK_SIZE, CHUNK_SIZE, 1)
-        x_cell, y_cell = x[2] - x[1], y[2] - y[1]
-    else
-        dims2 = ("x", "y")
-        chunk_lines = round(Int, min(ceil(8192 / ny) * 128, ny))
-        chunks2 = (nx, chunk_lines)
-        x_cell = length(x) > 1 ? x[2] - x[1] : PIXEL_SIZE
-        y_cell = length(y) > 1 ? y[2] - y[1] : -PIXEL_SIZE
-    end
+    # netCDF order, slowest first. Each name assigned once: the `with_netcdf` block below captures them,
+    # and a captured name assigned on two branches is boxed.
+    dims2, chunks2, x_cell, y_cell = _layout(x, y, cropped)
     # The literal `0`/`0.0` rotation terms differ by path: `crop.py`'s f-string embeds a bare `0`,
     # but the uncropped path's is `str(0.0)` from a Python float list (`netcdf_output.py`'s own
     # `tran` array) — confirmed against a real uncropped product, not assumed identical to the
@@ -798,13 +876,13 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
     zero = cropped ? "0" : "0.0"
     mapping_dict["GeoTransform"] = "$(_geo_num(x[1])) $(_geo_num(x_cell)) $zero $(_geo_num(y[1])) $zero $(_geo_num(y_cell))"
     date_center_str = _format_date(date_center_dt)
-    date_center_str = rstrip(date_center_str, '0')
+    date_center_str = String(rstrip(date_center_str, '0'))
     img_pair_info_dict["date_center"] = date_center_str
 
-    _with_netcdf_create(path, cropped) do ds
+    with_netcdf(String(path), cropped) do ds
         _setattr!(ds, "GDAL_AREA_OR_POINT", "Area")
         _setattr!(ds, "Conventions", "CF-1.8")
-        _setattr!(ds, "date_created", Dates.format(Dates.now(), "dd-u-yyyy HH:MM:SS"))
+        _setattr!(ds, "date_created", _format_created(Dates.now()))
         _setattr!(ds, "title", TITLE)
         _setattr!(ds, "autoRIFT_software_version", input.autorift_software_version)
         _setattr!(ds, "autoRIFT_parameter_file", input.parameter_file)
@@ -819,9 +897,9 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
 
         # Declared in the reference's own dimension order (`time, y, x`) — cosmetic (a reader
         # accesses dimensions by name, not position), but free to match.
-        cropped && NCDatasets.defDim(ds, "time", Inf)
-        NCDatasets.defDim(ds, "y", ny)
-        NCDatasets.defDim(ds, "x", nx)
+        cropped && def_dim!(ds, "time", nothing)
+        def_dim!(ds, "y", ny)
+        def_dim!(ds, "x", nx)
 
         # `crop.py`'s explicit `encoding` dict only covers `ds.data_vars`, not the coordinate
         # variables — `x`/`y`/`time` fall through to xarray's default float64 encoding, which sets
@@ -833,12 +911,10 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
         _defvar_coord!(ds, "y", y, "projection_y_coordinate", "y coordinate of projection"; fillvalue = coord_fill)
 
         if cropped
-            t = NCDatasets.defVar(ds, "time", Float64, ("time",); fillvalue = NaN)
+            t = def_var!(ds, "time", Float64, ("time",); fillvalue = NaN)
             jitter_us = mod(hash(basename(path)), 1_000_000)
             seconds = (Dates.value(date_center_dt - GPS_EPOCH) * 1000 + jitter_us) / 1.0e6
-            # `t[:] = [seconds]` on an unlimited dim at record-count 0 silently leaves netCDF's
-            # default fill in place instead of growing the dimension; scalar record assignment does not.
-            t[1] = seconds
+            put_var!(t, [seconds]; start = (0,), count = (1,))
             _setattr!(t, "standard_name", "time")
             _setattr!(t, "description", "mid-date between acquisition_date_img1 and acquisition_date_img2 " *
                                        "with microseconds added to ensure uniqueness.")
@@ -855,10 +931,10 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
         # against a real product's `ncdump -h`; matched here rather than corrected, per this
         # package's rule of reproducing the reference exactly.
         img = _defvar_scalar!(ds, "img_pair_info", Int8(-127),
-                               Dict{String,Any}("standard_name" => "image_pair_information"),
+                               Dict{String,AttrValue}("standard_name" => "image_pair_information"),
                                cropped ? ("time",) : ())
         for (k, val) in img_pair_info_dict
-            _setattr!(img, k, val)
+            put_attvalue!(img, k, val)
         end
 
         vx_desc = is_radar ? "velocity component in x direction from radar range and azimuth measurements" :
@@ -876,7 +952,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
         _write_velocity_error_attribs!(vxv, vx_stats, "best estimate of x_velocity error: vx_error is " *
             "populated according to the approach used for the velocity bias correction as indicated in " *
             "\"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
-        _put!(vxv, _quantize_i16(vx, nodata))
+        _put!(vxv, _quantize_i16(vx, nodata), cropped)
 
         vyv = _defvar_2d!(ds, "vy", Int16, NODATA_I16, dims2, chunks2)
         _setattr!(vyv, "standard_name", "land_ice_surface_y_velocity")
@@ -886,23 +962,28 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
         _write_velocity_error_attribs!(vyv, vy_stats, "best estimate of y_velocity error: vy_error is " *
             "populated according to the approach used for the velocity bias correction as indicated in " *
             "\"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
-        _put!(vyv, _quantize_i16(vy, nodata))
+        _put!(vyv, _quantize_i16(vy, nodata), cropped)
 
         vv = _defvar_2d!(ds, "v", Int16, NODATA_I16, dims2, chunks2)
         _setattr!(vv, "standard_name", "land_ice_surface_velocity")
         _setattr!(vv, "description", "velocity magnitude")
         _setattr!(vv, "units", "meter/year")
         _setattr!(vv, "grid_mapping", "mapping")
-        _put!(vv, _quantize_i16(v, nodata))
+        _put!(vv, _quantize_i16(v, nodata), cropped)
 
         vev = _defvar_2d!(ds, "v_error", Int16, NODATA_I16, dims2, chunks2)
         _setattr!(vev, "standard_name", "velocity_error")
         _setattr!(vev, "description", v_error_desc)
         _setattr!(vev, "units", "meter/year")
         _setattr!(vev, "grid_mapping", "mapping")
-        _put!(vev, _quantize_i16(V_error, nodata))
+        _put!(vev, _quantize_i16(V_error, nodata), cropped)
 
         if is_radar
+            # Present on a radar pair: `write_product` built them.
+            vr, va = d.vr::Matrix{Float32}, d.va::Matrix{Float32}
+            m11, m12 = d.m11::Matrix{Float32}, d.m12::Matrix{Float32}
+            vr_stats, va_stats = d.vr_stats::_ErrorStats, d.va_stats::_ErrorStats
+            dr_to_vr_factor = d.dr_to_vr_factor::Float64
             vrv = _defvar_2d!(ds, "vr", Int16, NODATA_I16, dims2, chunks2)
             _setattr!(vrv, "standard_name", "range_velocity")
             _setattr!(vrv, "description", "velocity in radar range direction")
@@ -911,7 +992,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _write_velocity_error_attribs!(vrv, vr_stats, "best estimate of range_velocity error: " *
                 "vr_error is populated according to the approach used for the velocity bias correction " *
                 "as indicated in \"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
-            _put!(vrv, _quantize_i16(vr, nodata))
+            _put!(vrv, _quantize_i16(vr, nodata), cropped)
 
             vav = _defvar_2d!(ds, "va", Int16, NODATA_I16, dims2, chunks2)
             _setattr!(vav, "standard_name", "azimuth_velocity")
@@ -921,7 +1002,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _write_velocity_error_attribs!(vav, va_stats, "best estimate of azimuth_velocity error: " *
                 "va_error is populated according to the approach used for the velocity bias correction " *
                 "as indicated in \"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
-            _put!(vav, _quantize_i16(va, nodata))
+            _put!(vav, _quantize_i16(va, nodata), cropped)
 
             m11v = _defvar_2d!(ds, "M11", Float32, NODATA_F32, dims2, chunks2)
             _setattr!(m11v, "standard_name", "conversion_matrix_element_11")
@@ -932,7 +1013,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _setattr!(m11v, "grid_mapping", "mapping")
             _setattr!(m11v, "dr_to_vr_factor", dr_to_vr_factor)
             _setattr!(m11v, "dr_to_vr_factor_description", DR_TO_VR_FACTOR_DESCRIPTION)
-            _put!(m11v, _fill_f32(m11, nodata))
+            _put!(m11v, _fill_f32(m11, nodata), cropped)
 
             m12v = _defvar_2d!(ds, "M12", Float32, NODATA_F32, dims2, chunks2)
             _setattr!(m12v, "standard_name", "conversion_matrix_element_12")
@@ -943,7 +1024,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _setattr!(m12v, "grid_mapping", "mapping")
             _setattr!(m12v, "dr_to_vr_factor", dr_to_vr_factor)
             _setattr!(m12v, "dr_to_vr_factor_description", DR_TO_VR_FACTOR_DESCRIPTION)
-            _put!(m12v, _fill_f32(m12, nodata))
+            _put!(m12v, _fill_f32(m12, nodata), cropped)
         end
 
         cszwv = _defvar_2d!(ds, "chip_size_width", UInt16, UInt16(0), dims2, chunks2)
@@ -958,7 +1039,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _setattr!(cszwv, "x_pixel_size", input.georef.pixel_size_x)
             _setattr!(cszwv, "chip_size_coordinates", CHIP_SIZE_COORDINATES.optical)
         end
-        _put!(cszwv, _quantize_u16(chip_size_width))
+        _put!(cszwv, _quantize_u16(chip_size_width), cropped)
 
         cszhv = _defvar_2d!(ds, "chip_size_height", UInt16, UInt16(0), dims2, chunks2)
         _setattr!(cszhv, "standard_name", "chip_size_height")
@@ -972,7 +1053,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
             _setattr!(cszhv, "y_pixel_size", pixel_size_y)
             _setattr!(cszhv, "chip_size_coordinates", CHIP_SIZE_COORDINATES.optical)
         end
-        _put!(cszhv, _quantize_u16(chip_size_height))
+        _put!(cszhv, _quantize_u16(chip_size_height), cropped)
 
         imv = _defvar_2d!(ds, "interp_mask", UInt8, UInt8(0), dims2, chunks2)
         _setattr!(imv, "standard_name", "interpolated_value_mask")
@@ -980,7 +1061,7 @@ function _write_file!(path, input, is_radar, x, y, vx, vy, v, V_error, vr, va, m
         _setattr!(imv, "flag_values", UInt8[0, 1])
         _setattr!(imv, "flag_meanings", "measured interpolated")
         _setattr!(imv, "grid_mapping", "mapping")
-        _put!(imv, UInt8.(interp_mask))
+        _put!(imv, UInt8.(interp_mask), cropped)
     end
     return path
 end
