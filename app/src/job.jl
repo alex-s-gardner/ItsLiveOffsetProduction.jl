@@ -166,7 +166,11 @@ function s2_band_url(name::String)
         "cannot read an MGRS tile out of \"" * name * "\"; expected field 6 like T22WEB"))
     safe = S2_MIRROR * "/" * tile[2:3] * "/" * tile[4:4] * "/" * tile[5:6] * "/" * name * ".SAFE"
     manifest = read_text(safe * "/manifest.safe")
-    hits = unique(String[m.match for m in eachmatch(r"GRANULE/[^\"<>]*B08\.jp2", manifest)])
+    # The band under IMG_DATA only: from processing baseline 04.00 the manifest also lists QI_DATA masks
+    # whose names end in B08.jp2.
+    hits = unique(String[m.match for m in eachmatch(r"GRANULE/[^\"<>]*/IMG_DATA/[^\"<>]*_B08\.jp2", manifest)])
+    # A product from before December 2016 holds every tile of its datatake: its own is the one named.
+    length(hits) > 1 && filter!(h -> occursin(tile * "_B08", h), hits)
     length(hits) == 1 || throw(ArgumentError("expected one B08 entry in " * name * "'s manifest.safe, found " *
                                              string(length(hits))))
     return safe * "/" * hits[1]
