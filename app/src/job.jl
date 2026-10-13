@@ -169,6 +169,8 @@ function s2_band_url(name::String)
     # The band under IMG_DATA only: from processing baseline 04.00 the manifest also lists QI_DATA masks
     # whose names end in B08.jp2.
     hits = unique(String[m.match for m in eachmatch(r"GRANULE/[^\"<>]*/IMG_DATA/[^\"<>]*_B08\.jp2", manifest)])
+    # A product from before December 2016 holds every tile of its datatake: its own is the one named.
+    length(hits) > 1 && filter!(h -> occursin(tile * "_B08", h), hits)
     length(hits) == 1 || throw(ArgumentError("expected one B08 entry in " * name * "'s manifest.safe, found " *
                                              string(length(hits))))
     return safe * "/" * hits[1]
