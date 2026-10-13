@@ -151,10 +151,17 @@ end
     try
         write_product(path, input)
         @test isfile(path)
+        # Written as `.part` and renamed, so nothing is left beside the product.
+        @test !isfile(path * ".part")
         NCDataset(path) do ds
             @test haskey(ds, "vx")
             @test haskey(ds, "vr")   # the radar-only schema addition
         end
+
+        # A write that fails partway leaves neither the product nor its `.part`.
+        failed = tempname() * ".nc"
+        @test_throws "boom" ItsLiveOffsetProduction.with_netcdf(_ -> error("boom"), failed, false)
+        @test !isfile(failed) && !isfile(failed * ".part")
 
         # `swath_bias = nothing` must still work — every other test in this repo that builds an
         # `ItsLiveInput` passes it, and this is the path they all take.

@@ -36,6 +36,10 @@ Run `c` end to end and write its ITS_LIVE product to `output`, returning the pat
 from its source; nothing is staged locally except the run's tile caches under a directory of its own,
 deleted when the run ends, whether it succeeds or not. A scratch directory on a RAM-backed filesystem is
 refused before anything is read: see [`ram_backed_mount`](@ref).
+
+A run killed by a signal (SIGTERM from a Spot interruption or AWS Batch, SIGKILL from the kernel's OOM
+killer) cannot delete its directory, so each run holds a lock on it ([`lock_run_dir`](@ref)) and the next
+run on the same scratch removes every directory whose lock nobody holds ([`remove_stale_runs`](@ref)).
 """
 function run_job(c::Job, output::String; options::RunOptions = RunOptions())
     mkpath(options.scratch)
@@ -44,7 +48,9 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
         "the scratch directory " * options.scratch * " is on a RAM-backed " * fs * " filesystem, where the " *
         "run's tile caches (gigabytes for a radar pair) would count against memory; pass --scratch a " *
         "directory on disk"))
+    remove_stale_runs(options.scratch)
     dir = mktempdir(options.scratch; cleanup = false)
+    held = lock_run_dir(dir)
     try
         if startswith(c.platform, "S1")
             t0 = time_ns()
@@ -89,8 +95,54 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
         end
     finally
         rm(dir; recursive = true, force = true)
+        close(held)
     end
     return output
+end
+
+const LOCK_EX = Cint(2)
+const LOCK_NB = Cint(4)
+const RUN_LOCK = ".autorift_run.lock"
+
+_fd(io::IOStream) = reinterpret(Cint, fd(io))
+_trylock(io::IOStream) = ccall(:flock, Cint, (Cint, Cint), _fd(io), LOCK_EX | LOCK_NB) == 0
+
+"""
+    lock_run_dir(dir) -> IOStream
+
+An exclusive `flock` on `dir`'s lock file, held as long as the returned stream is open. The kernel releases
+it when the process ends however it ends, which is what tells [`remove_stale_runs`](@ref) the run is gone.
+The lock is taken on a file of another name and the file then renamed, so the lock file exists only while
+locked: a run starting meanwhile cannot find it unlocked and remove a directory still in use.
+"""
+function lock_run_dir(dir::String)
+    staging = joinpath(dir, RUN_LOCK * ".new")
+    io = open(staging, "w")
+    _trylock(io) || (close(io); throw(ErrorException("cannot lock the run's scratch directory " * dir)))
+    mv(staging, joinpath(dir, RUN_LOCK))
+    return io
+end
+
+"""
+    remove_stale_runs(scratch)
+
+Delete each run directory under `scratch` whose lock no process holds: what a run killed by a signal leaves.
+A directory without a lock file is not a run's and is left alone.
+"""
+function remove_stale_runs(scratch::String)
+    for name in readdir(scratch)
+        d = joinpath(scratch, name)
+        lockfile = joinpath(d, RUN_LOCK)
+        isfile(lockfile) || continue
+        io = open(lockfile, "r")
+        stale = try
+            _trylock(io)
+        finally
+            close(io)
+        end
+        stale && rm(d; recursive = true, force = true)
+    end
+    return nothing
 end
 
 """
