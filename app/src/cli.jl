@@ -111,11 +111,26 @@ function parse_args(args::Vector{String})
 end
 
 # An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
-# exception: the message of the exception types the chain throws, else the exception's type name.
-function error_message(err)
+# exception: the message of the exception types the chain throws, else the exception's type name. A failure
+# in a spawned task or a `@threads` loop arrives wrapped, and is reported as the exception it wraps.
+# Inlined into each `catch`, and unwrapping in a loop rather than by recursion: the exception has no static
+# type, and a call taking it is one `--trim` cannot resolve.
+@inline function error_message(wrapped)
+    err = wrapped
+    for _ in 1:16
+        if err isa TaskFailedException
+            err = err.task.exception
+        elseif err isa CompositeException && !isempty(err.exceptions)
+            err = first(err.exceptions)
+        else
+            break
+        end
+    end
     m = err isa ArgumentError ? err.msg :
         err isa ErrorException ? err.msg :
         err isa DimensionMismatch ? err.msg :
+        err isa SystemError ? err.prefix * ": " * Libc.strerror(err.errnum) :
+        err isa Base.IOError ? err.msg :
         err isa GDAL.GDALError ? err.msg : nothing
     return m isa String ? m : string(nameof(typeof(err)))
 end
