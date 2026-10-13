@@ -117,15 +117,22 @@ nc_close(f::NcFile) =
 """
     with_netcdf(f, path, nc_string)
 
-Create `path`, call `f(file)`, and close it whether or not `f` throws.
+Create `path`, call `f(file)`, and close it whether or not `f` throws. The file is written as
+`path * ".part"` and renamed to `path` once closed, so a write that fails or is killed partway never
+leaves a truncated file under the name a complete product has; a failed write removes the `.part`.
 """
 function with_netcdf(f::F, path::String, nc_string::Bool) where {F}
-    file = nc_create(path, nc_string)
+    part = path * ".part"
+    file = nc_create(part, nc_string)
+    written = false
     try
         f(file)
+        written = true
     finally
         nc_close(file)
+        written || rm(part; force = true)
     end
+    mv(part, path; force = true)
     return path
 end
 

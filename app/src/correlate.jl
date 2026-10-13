@@ -95,20 +95,21 @@ const DY_SIGN = -1.0f0
 dy_sign(::Setup) = DY_SIGN
 
 """
-    correlate(s, img, pre; filter_tile, cache_io, masked) -> Correlation
+    correlate(s, img, pre; filter_tile, cache_io, masked, scratch) -> Correlation
 
 `run_job`'s grid and correlate stages for one correlator filter `pre`: the driver's chip-size maximum and
 the parameters the geometry implies, the grid chopped to a multiple of the coarsest level and declined where
 the no-data mask is set, and a blocked `autorift` over 512² read chunks. `filter_tile` is the side of
-`AutoRIFT.FilterTileCache`'s tiles, which keeps each filtered tile across the passes; that cache holds only
-a `Highpass` result. `masked` hands `WallisGapfill` its gaps as the pixels reading zero (`np.isclose(image,
-0)`), which AutoRIFT reads from the validity masks rather than from the values.
+`AutoRIFT.FilterTileCache`'s tiles, which keeps each filtered tile across the passes in a file under
+`scratch`; that cache holds only a `Highpass` result. `masked` hands `WallisGapfill` its gaps as the pixels
+reading zero (`np.isclose(image, 0)`), which AutoRIFT reads from the validity masks rather than from the
+values.
 
 The outputs are pasted into the pre-chop grid and dropped wherever the grown mask or a zero search limit
 says the driver reports nothing (`testautoRIFT.py:806-818`).
 """
 function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile::Union{Nothing,Int},
-                   cache_io::Symbol, masked::Bool)
+                   cache_io::Symbol, masked::Bool, scratch::String)
     g = s.geometry
     declined = img.declined
     cmax = driver_chip_size_max(g, declined)
@@ -130,10 +131,11 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     r = if masked
         pair = AutoRIFT.ImagePair(img.late, img.early; reference_valid = NonzeroMask(img.late),
                                   secondary_valid = NonzeroMask(img.early))
-        AutoRIFT.autorift(pair, grid, p, (b.X, b.Y), 0, filter_tile; filter_cache_io = cache_io)
+        AutoRIFT.autorift(pair, grid, p, (b.X, b.Y), 0, filter_tile; filter_cache_io = cache_io,
+                          filter_cache_dir = scratch)
     else
         AutoRIFT.autorift(AutoRIFT.ImagePair(img.late, img.early), grid, p, (b.X, b.Y), 0, filter_tile;
-                          filter_cache_io = cache_io)
+                          filter_cache_io = cache_io, filter_cache_dir = scratch)
     end
     dx = pad_to_orig(Matrix{Float32}(r.dx), orig, NaN32)
     dy = dy_sign(s) .* pad_to_orig(Matrix{Float32}(r.dy), orig, NaN32)
