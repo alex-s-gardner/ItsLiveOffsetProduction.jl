@@ -1,4 +1,6 @@
 Manifest.toml
+# The app's is committed: it pins the dependency graph the executable is built from.
+!/app/Manifest.toml
 .DS_Store
 /tools/golden/Manifest.toml
 /tools/golden/results/
