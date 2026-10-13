@@ -16,7 +16,8 @@ usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> 
   output.nc    where the ITS_LIVE product is written
 
 options:
-  --scratch DIR        local scratch for the run's tile caches (default: \$TMPDIR/autorift_itslive_production)
+  --scratch DIR        local scratch for the run's tile caches (default: \$TMPDIR/autorift_itslive_production);
+                       must be on disk, not a RAM-backed tmpfs such as /tmp on Amazon Linux
   --cache-io MODE      pread (default) or mmap, how the scratch tile caches are accessed
   --filter-tile N      side of the filtered-tile cache's tiles in pixels (default 512)
   --heap-hint-gib N    heap size the collector aims to stay under, GiB (default 12; 0 for none)
