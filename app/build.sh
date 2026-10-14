@@ -20,4 +20,6 @@ mkdir -p "$(dirname "$out")"
 # The FFTW wisdom each run starts from (`ensure_environment` in src/cli.jl), one file per CPU model.
 mkdir -p "$out/share/autorift_itslive_production/fftw-wisdom"
 cp "$here"/wisdom/*.wisdom "$out/share/autorift_itslive_production/fftw-wisdom/"
+# What the bundle is and how to run it, at the bundle's root.
+cp "$here/RELEASE.md" "$out/README.md"
 echo "built $out/bin/autorift_itslive_production"
