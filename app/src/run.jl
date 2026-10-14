@@ -33,9 +33,9 @@ rpad_ascii(s::String, n::Int) = ncodeunits(s) >= n ? s : s * String(fill(UInt8('
     run_job(c::Job, output; options = RunOptions()) -> String
 
 Run `c` end to end and write its ITS_LIVE product to `output`, returning the path. Every scene is read
-from its source; nothing is staged locally except the run's tile caches under a directory of its own,
-deleted when the run ends, whether it succeeds or not. A scratch directory on a RAM-backed filesystem is
-refused before anything is read: see [`ram_backed_mount`](@ref).
+from its source; nothing is staged locally except the run's tile caches and a remote Sentinel-2 band, under
+a directory of its own, deleted when the run ends, whether it succeeds or not. A scratch directory on a
+RAM-backed filesystem is refused before anything is read: see [`ram_backed_mount`](@ref).
 
 A run killed by a signal (SIGTERM from a Spot interruption or AWS Batch, SIGKILL from the kernel's OOM
 killer) cannot delete its directory, so each run holds a lock on it ([`lock_run_dir`](@ref)) and the next
@@ -86,12 +86,15 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
             _correlate(c, rs, img, output, options, dir)
         else
             t0 = time_ns()
-            s = setup(c)
+            j = stage_bands(c, dir)
+            j === c || _log(options, "download", t0)
+            t0 = time_ns()
+            s = setup(j)
             _log(options, "geometry", t0)
             t0 = time_ns()
             img = native_imagery(s; dir, cache_io = options.cache_io)
             _log(options, "imagery", t0)
-            _correlate(c, s, img, output, options, dir)
+            _correlate(j, s, img, output, options, dir)
         end
     finally
         rm(dir; recursive = true, force = true)
