@@ -54,8 +54,9 @@ the executable runs itself again when either is unset:
 
 Every run on a CPU model the bundle has wisdom for therefore plans its transforms alike: products are
 reproducible run to run, and only bit-identical between runs that start from the same wisdom. Wisdom is
-keyed by CPU model and FFTW version. On a CPU without a file the run measures its plans and is slower.
-To give it one:
+keyed by CPU model and FFTW version. `app/wisdom/` holds a file for Apple M2 Max, Graviton4 (`neoverse-v2`),
+Graviton5 (`neoverse-v3`) and AMD EPYC 9R45; `RELEASE.md` says which runs grew each. On a CPU without a file
+the run measures its plans and is slower. To give it one:
 
 1. run the golden cases with `AUTORIFT_FFTW_WISDOM_DIR` set to one directory;
 2. copy the file written there into `app/wisdom/`.
