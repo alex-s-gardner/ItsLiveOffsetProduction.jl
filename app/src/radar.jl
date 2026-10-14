@@ -56,6 +56,7 @@ struct RadarSetup{P,G,R}
     late::SceneSource
     early_product::R
     late_product::R
+    # The NISAR polarization both products are read at; empty for Sentinel-1, whose product holds its own.
     polarization::String
     pair::P
     region::Region
@@ -88,21 +89,21 @@ function radar_setup(c::Job)
     grid = parameter_grid(region)
     nd = with_dataset(band_nodata, region.paths[4])
     g = FGP.native_crs(region.epsg)
-    g isa FGP.UTMCRS && return _radar_setup(c, early, late, re, rl, pol, pair, region, grid, nd, g)
-    g isa FGP.PolarStereographicCRS && return _radar_setup(c, early, late, re, rl, pol, pair, region, grid, nd, g)
+    g isa FGP.UTMCRS && return _radar_setup(c, early, late, re, rl, pair, region, grid, nd, g; polarization = pol)
+    g isa FGP.PolarStereographicCRS && return _radar_setup(c, early, late, re, rl, pair, region, grid, nd, g; polarization = pol)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(region.epsg)))
 end
 
-function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::R, pol::String, pair,
+function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::R, pair,
                       region::Region, grid::Grid, nd::Union{Nothing,Float64}, g::FGP.NativeCRS;
-                      pending::Vector{Task} = Task[]) where {R}
+                      pending::Vector{Task} = Task[], polarization::String = "") where {R}
     f = FGP.Transformation(g, FGP.GeographicCRS())
     tf = TransformPair(f, inv(f))
     window = grid_window(grid, footprint_bounds(tf, pair.coordinate))
     inputs = geometry_inputs(region, window)
     geom = pairgeometry_blocked(grid, pair, InMemoryInputs(inputs, window); transform = () -> tf, window,
                                 nodata = nodata_from(nd === nothing ? 0.0 : nd))
-    return RadarSetup(c, early, late, re, rl, pol, pair, region, grid, window, inputs, geom, pending)
+    return RadarSetup(c, early, late, re, rl, polarization, pair, region, grid, window, inputs, geom, pending)
 end
 
 dy_sign(::RadarSetup) = -DY_SIGN
