@@ -5,3 +5,4 @@ Manifest.toml
 /tools/golden/Manifest.toml
 /tools/golden/results/
 /app/build/
+/tools/benchmark/pairs/*_check.tsv
