@@ -449,6 +449,32 @@ and compilation.
 
 At 10 threads NL1's peak exceeds 16 GiB under both the binary and the JIT; at 6 threads it was 13.7–14.8 GiB.
 
+## NISAR memory on Linux
+
+macOS's footprint understates Linux's resident size: NL1 P094 at 4 threads peaks at 13.9 GiB on this Mac, and
+was killed for memory on a 16 GiB Linux instance at 15.6 GB. Measured instead in a `linux/arm64` container on
+the same machine (JIT app, local granules, `RssAnon` sampled every 0.25 s):
+
+| NL1 P094, 4 threads | peak anonymous RSS | wall s |
+|---|---:|---:|
+| as before | 15.79 GiB | 1,786 |
+| glibc mmap and trim thresholds fixed at 1 MiB (`release_freed_memory!`) | 10.36 GiB | — |
+| and the workspace pool bounded to 0.5 GiB | 8.59 GiB | — |
+| both, through `julia_main`, in a 16 GiB container | 10.02 GiB | 1,738 |
+
+NL2 P093 with both, in a 16 GiB container: 8.33 GiB, 1,296 s. Neither setting changes a product: every data
+variable of NL1 is identical. The two middle rows ran concurrently, so their wall times are not comparable.
+
+- **glibc.** Over the correlation the resident size climbs from 2.4 to 5.5 GiB above the live heap: glibc
+  raises its mmap threshold to each freed mapped block, up to 32 MiB, and keeps blocks below it in heaps it
+  rarely shrinks. `julia_main` fixes both thresholds with `mallopt`.
+- **The workspace pool.** About a hundred search geometries, most of 15–20 MiB, filled AutoRIFT's 2 GiB pool
+  with workspaces of finished levels.
+- **What is left.** A heap snapshot mid-correlation holds 5.6 GiB: the four tasks' block buffers (2.1 GiB, a
+  5374×10472 read window), the geometry (1.0) and AutoRIFT's per-level point sets (1.1), with up to 1.3 GiB of
+  workspace in use. In an 8 GiB container NL1 runs out of memory even with a 6 GiB heap target and 1 GiB of
+  workspace in use at most.
+
 ## Remote reads from ASF
 
 Every case below read its granules from ASF at 10 threads, with the bytes received on `en0` sampled every 2 s.

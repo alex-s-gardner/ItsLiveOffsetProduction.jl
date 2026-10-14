@@ -154,7 +154,9 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         return Cint(2)
     end
     try
+        release_freed_memory!()
         set_heap_hint!(a.heap_hint_gib)
+        AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
         job = Job(a.sensor, a.reference, a.secondary)
         path = run_job(job, a.output; options = a.options)
         say("wrote " * path)
