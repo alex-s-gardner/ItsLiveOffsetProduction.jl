@@ -252,6 +252,32 @@ time: 73 s of LC08 060018's 111 s, 80–84 s of each S2 case's 99 s. From local 
 in 22.9 s and 26.4 s (about 8× and 7× Python, whose S2 runs read local files) with identical products.
 The Landsat cases short of 4× are bound by the same link.
 
+**Sentinel-2 from the Google mirror, measured in us-west-2.** On an m9gd.xlarge (Graviton5) at 4 threads the
+S2A 07VEG pair ran in 111–116 s, of which 97–111 s was imagery and 7.5 s correlation. Two plain `curl`s of the
+two bands take 5.7 s. The time is latency: the mirror takes 0.35–0.45 s to first byte, and a 1 MiB range
+takes 1.3 s on a new connection, so throughput scales with the requests in flight (0.8 MiB/s with one,
+38 MiB/s with 32).
+
+- A Sentinel-2 band carries no TLM marker, so reading it in place locates its 121 tiles by following each
+  tile-part's length to the next header: about 120 requests of 12 bytes per band, after 29 probe windows of
+  512 KiB. Each of those requests blocks a thread, so no more than 4 run at once, and the second band starts
+  only when the first has finished. Per band, with a local server adding 0.35 s to each request, the probes
+  take 0–5 s, the header walk about 15 s and the tile data about 10 s.
+- More tiles in flight did not help (4 to 64: imagery 102 to 88 s); more threads did (16: 53 s, 32: 47 s).
+- `stage_band` copies each URL band into the run's scratch directory first, both bands at once, with the
+  transport's concurrent range fetch. The copy takes 2.6–3.4 s for the pair; a call carrying 32 MiB of each band takes 10.4 s,
+  64 MiB 6.4 s and 128 MiB, a whole band, 3 s, and the stages after it read local files:
+
+| S2A 07VEG pair, m9gd.xlarge | download | geometry | imagery | correlate | wall s | peak GiB |
+|---|---:|---:|---:|---:|---:|---:|
+| read in place | — | 4.8–5.3 | 97–111 | 7.5 | 111–116 | 1.43 |
+| copied first | 2.6–3.4 | 1.5 | 10.5–11.2 | 7.1–7.2 | 22.3–23.8 | 1.85–2.08 |
+| local paths | — | 1.3 | 10.4 | 7.1 | 19.3 | 1.97 |
+
+Every data variable of the product is identical to the one read in place. `Aria2_jll` does not start on
+aarch64 Linux (`OSSL_PROVIDER_load 'legacy' failed`), and splitting each band into many ranges saves only
+about 1.4 s over fetching the two bands at once.
+
 ## Phase 5: NISAR (done, local and HTTP reads)
 
 The binary takes `NL1` (RSLC) and `NL2` (GSLC) granules as paths or URLs: 0 verifier errors.

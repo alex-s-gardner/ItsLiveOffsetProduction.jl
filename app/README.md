@@ -20,7 +20,9 @@ full option list.
 | `NL1` `NL2` | a NISAR RSLC or GSLC `.h5` |
 
 Each input is a local path, an `s3://` URI or an `https://` URL; scenes are read in place, a window at a
-time. Landsat comes from requester-pays `s3://usgs-landsat`, so the AWS credential chain must name an account
+time. A Sentinel-2 band given as a URL is the exception: it is copied to the run's scratch directory first
+(about 125 MB each, both at once), because a JPEG 2000 file read in place costs a request per tile-part header
+and per tile. Landsat comes from requester-pays `s3://usgs-landsat`, so the AWS credential chain must name an account
 that can pay. An Earthdata host (NISAR from ASF) is read with `EARTHDATA_TOKEN` or a token obtained with the
 `urs.earthdata.nasa.gov` entry of `~/.netrc`. Bursts come from ASF's burst extractor
 (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`, the URLs ASF's search lists),
