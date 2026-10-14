@@ -11,11 +11,14 @@ from `EARTHDATA_TOKEN` or `~/.netrc`.
 """
 function open_rslc(uri::String)
     src = SLCDatasets.source_for(uri)
-    src isa SLCDatasets.LocalFile && return SLCDatasets._open_nisar(src; frequency = nothing)::RslcProduct
-    src isa SLCDatasets.RemoteHTTP && return SLCDatasets._open_nisar(src; frequency = nothing)::RslcProduct
-    src isa SLCDatasets.RemoteS3 && return SLCDatasets._open_nisar(src; frequency = nothing)::RslcProduct
+    src isa SLCDatasets.LocalFile && return open_rslc(src)
+    src isa SLCDatasets.RemoteHTTP && return open_rslc(src)
+    src isa SLCDatasets.RemoteS3 && return open_rslc(src)
     throw(ArgumentError("no source for " * uri))
 end
+
+open_rslc(src::SLCDatasets.AbstractSLCSource) =
+    require_frequency_a(SLCDatasets._open_nisar(src; frequency = nothing)::RslcProduct)
 
 _look(side) = side == SLCDatasets.LookLeft ? ImagePairGeometry.LookLeft : ImagePairGeometry.LookRight
 
@@ -53,6 +56,7 @@ struct RadarSetup{P,G,R}
     late::SceneSource
     early_product::R
     late_product::R
+    polarization::String
     pair::P
     region::Region
     grid::Grid
@@ -74,6 +78,8 @@ read from the `vx` raster rather than the DEM (`geogridRadar.cpp:509-512`).
 function radar_setup(c::Job)
     early, late = acquisition_order(c)
     re, rl = open_rslc(early.band), open_rslc(late.band)
+    ref, sec = c.reference.name == early.name ? (re, rl) : (rl, re)
+    pol = nisar_polarization(ref.backend, sec.backend)
     dt = SLCDatasets.repeat_interval(re, rl)
     dt > 0 || throw(ArgumentError("the secondary acquisition does not start after the reference"))
     pair = CoregisteredPair(radar_coordinate(re); dt, secondary = radar_coordinate(rl))
@@ -82,12 +88,12 @@ function radar_setup(c::Job)
     grid = parameter_grid(region)
     nd = with_dataset(band_nodata, region.paths[4])
     g = FGP.native_crs(region.epsg)
-    g isa FGP.UTMCRS && return _radar_setup(c, early, late, re, rl, pair, region, grid, nd, g)
-    g isa FGP.PolarStereographicCRS && return _radar_setup(c, early, late, re, rl, pair, region, grid, nd, g)
+    g isa FGP.UTMCRS && return _radar_setup(c, early, late, re, rl, pol, pair, region, grid, nd, g)
+    g isa FGP.PolarStereographicCRS && return _radar_setup(c, early, late, re, rl, pol, pair, region, grid, nd, g)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(region.epsg)))
 end
 
-function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::R, pair,
+function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::R, pol::String, pair,
                       region::Region, grid::Grid, nd::Union{Nothing,Float64}, g::FGP.NativeCRS;
                       pending::Vector{Task} = Task[]) where {R}
     f = FGP.Transformation(g, FGP.GeographicCRS())
@@ -96,7 +102,7 @@ function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::
     inputs = geometry_inputs(region, window)
     geom = pairgeometry_blocked(grid, pair, InMemoryInputs(inputs, window); transform = () -> tf, window,
                                 nodata = nodata_from(nd === nothing ? 0.0 : nd))
-    return RadarSetup(c, early, late, re, rl, pair, region, grid, window, inputs, geom, pending)
+    return RadarSetup(c, early, late, re, rl, pol, pair, region, grid, window, inputs, geom, pending)
 end
 
 dy_sign(::RadarSetup) = -DY_SIGN
@@ -498,7 +504,7 @@ end
 function ResampledRSLC(s::RadarSetup, dem::D; dir::String) where {D}
     # Each window read is the support of a shifted output tile, so neighbouring windows share chunks; a
     # remote granule's chunks are cached under `dir` as they arrive, so each is fetched once.
-    px = SLCDatasets.pixels(s.late_product)
+    px = nisar_pixels(s.late_product, s.polarization)
     src = permutedims(ChunkManifests.cached(parent(px), dir), (2, 1))
     cr, cs = s.pair.coordinate, s.pair.secondary_offset_coordinate
     dims = (s.early_product.geometry.nlines, s.early_product.geometry.nsamples)
@@ -554,7 +560,7 @@ The reference's own amplitude for a NISAR L1 pair, which defines the grid, fille
 `dir`. It needs no terrain, so it is read while the DEM is.
 """
 function radar_reference(s::RadarSetup; dir::String, cache_io::Symbol)
-    ref = SLCDatasets.amplitude(SLCDatasets.pixels(s.early_product))
+    ref = SLCDatasets.amplitude(nisar_pixels(s.early_product, s.polarization))
     return fill_tiles!(TileCache(LazyWindow(ref, 0, 0, size(ref)); tile = 1024, dir, io = cache_io);
                        inflight = remote_tiles_in_flight())
 end

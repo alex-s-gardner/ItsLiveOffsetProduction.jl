@@ -3,14 +3,55 @@
 
 const GslcProduct = SLCDatasets.GeocodedProduct{SLCDatasets.NisarBackend}
 
+# The only frequency a NISAR product is read at.
+const NISAR_FREQUENCY = "A"
+
+# `p` itself, once it is known to have opened at [`NISAR_FREQUENCY`](@ref): a product opens at the first
+# frequency it lists, so a frequency-B-only mode is refused here rather than read at B.
+function require_frequency_a(p)
+    p.backend.frequency == NISAR_FREQUENCY || throw(ArgumentError(
+        p.backend.path * " opens at frequency " * p.backend.frequency * ", not " * NISAR_FREQUENCY))
+    return p
+end
+
+# The polarizations `b`'s product lists at its frequency.
+function nisar_polarizations(b::SLCDatasets.NisarBackend)::Vector{String}
+    group = b.product_type in SLCDatasets.GEOCODED_TYPES ? "grids" : "swaths"
+    name = string(SLCDatasets.product_path(b), "/", group, "/frequency", b.frequency, "/listOfPolarizations")
+    return SLCDatasets._with_file(f -> ChunkManifests.h5_read_strings(f, name), b)
+end
+
+"""
+    nisar_polarization(reference, secondary) -> String
+
+The polarization a NISAR pair is read at: `"HH"` if `reference` lists it, otherwise `"VV"`
+(`nisar_isce3.py:554-570`). Throws if `reference` lists neither, or `secondary` lacks the one chosen.
+hyp3-autorift reads a GSLC at HH only, so a VV-only GSLC pair is read here and refused there.
+"""
+function nisar_polarization(reference::SLCDatasets.NisarBackend, secondary::SLCDatasets.NisarBackend)
+    listed = nisar_polarizations(reference)
+    pol = "HH" in listed ? "HH" : "VV"
+    pol in listed || throw(ArgumentError(
+        reference.path * " lists " * join(listed, ", ") * " at frequency " * reference.frequency *
+        ", neither HH nor VV"))
+    pol in nisar_polarizations(secondary) || throw(ArgumentError(
+        secondary.path * " has no " * pol * " at frequency " * secondary.frequency * ", which the reference has"))
+    return pol
+end
+
+# `p`'s samples at polarization `pol`.
+nisar_pixels(p, pol::String) = SLCDatasets.NisarRaster(p.backend, pol)
+
 """
     GslcScene
 
-One GSLC of a pair cropped to the pair's overlap: the opened product, the zero-based `(row, col)` where the
-crop starts in the granule's grid, the crop's `(rows, cols)`, and the crop's footprint.
+One GSLC of a pair cropped to the pair's overlap: the opened product, the polarization the pair is read at
+([`nisar_polarization`](@ref)), the zero-based `(row, col)` where the crop starts in the granule's grid, the
+crop's `(rows, cols)`, and the crop's footprint.
 """
 struct GslcScene
     product::GslcProduct
+    polarization::String
     row0::Int
     col0::Int
     dims::Tuple{Int,Int}
@@ -25,11 +66,13 @@ from `EARTHDATA_TOKEN` or `~/.netrc`.
 """
 function open_gslc(uri::String)
     src = SLCDatasets.source_for(uri)
-    src isa SLCDatasets.LocalFile && return SLCDatasets.open_geocoded(src)::GslcProduct
-    src isa SLCDatasets.RemoteHTTP && return SLCDatasets.open_geocoded(src)::GslcProduct
-    src isa SLCDatasets.RemoteS3 && return SLCDatasets.open_geocoded(src)::GslcProduct
+    src isa SLCDatasets.LocalFile && return open_gslc(src)
+    src isa SLCDatasets.RemoteHTTP && return open_gslc(src)
+    src isa SLCDatasets.RemoteS3 && return open_gslc(src)
     throw(ArgumentError("no source for " * uri))
 end
+
+open_gslc(src::SLCDatasets.AbstractSLCSource) = require_frequency_a(SLCDatasets.open_geocoded(src)::GslcProduct)
 
 # A geocoded product's own map grid as a footprint.
 function gslc_footprint(g::GslcProduct)
@@ -48,7 +91,8 @@ geotransform, as `srcwin_for_intersection` does, with offsets and sizes rounded 
 """
 function gslc_crop(c::Job, early::SceneSource, late::SceneSource)
     pe, pl = open_gslc(early.band), open_gslc(late.band)
-    ref = c.reference.name == early.name ? pe : pl
+    ref, sec = c.reference.name == early.name ? (pe, pl) : (pl, pe)
+    pol = nisar_polarization(ref.backend, sec.backend)
     epsg = ref.grid.epsg
     lon, lat = _polygon_vertices(ref.identification.bounding_polygon)
     xs, ys = copy(lon), copy(lat)
@@ -69,7 +113,7 @@ function gslc_crop(c::Job, early::SceneSource, late::SceneSource)
             name * ": the overlap window does not fit the granule's grid"))
         cropped = ImageFootprint((fp.origin[1] + xoff * px_w, fp.origin[2] + yoff * px_h), fp.spacing,
                                  (xsize, ysize), fp.crs)
-        GslcScene(p, yoff, xoff, (ysize, xsize), cropped)
+        GslcScene(p, pol, yoff, xoff, (ysize, xsize), cropped)
     end
     return crop(early.name, pe), crop(late.name, pl)
 end
@@ -101,7 +145,7 @@ function gslc_image(g::GslcScene, offset::NTuple{2,Int}, want::Tuple{Int,Int}; d
     ox, oy = offset
     (g.dims[1] >= oy + want[1] && g.dims[2] >= ox + want[2]) || throw(DimensionMismatch(
         "the overlap does not fit in the GSLC's crop; the crop and the geotransform disagree"))
-    px = SLCDatasets.pixels(g.product)
+    px = nisar_pixels(g.product, g.polarization)
     amp = SLCDatasets.amplitude(px)
     # The cache starts on a boundary of the granule's own chunks, which its 1024-pixel tiles then contain
     # whole, so each chunk is read once however the window falls; the image itself starts `origin` in.
