@@ -19,6 +19,8 @@ OpticalDatasets = "a0fc030c-aaa4-4e24-9fdc-1cbe49ce0bda"
 SLCDatasets = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
 StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
 Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
+ZarrCore = "77f5b75c-4c08-499f-ba13-550b0a0af171"
+ZarrZlib = "5ee7c756-6ac8-46ad-a53f-994846513443"
 
 [sources]
 AutoRIFT = {rev = "main", url = "https://github.com/alex-s-gardner/AutoRIFT.jl"}
@@ -28,7 +30,9 @@ ImagePairGeometry = {rev = "main", url = "https://github.com/alex-s-gardner/Imag
 ItsLiveOffsetProduction = {path = ".."}
 OpticalDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"}
 SLCDatasets = {rev = "main", url = "https://github.com/alex-s-gardner/SLCDatasets.jl"}
-Zarr = {rev = "complex-int-dtype", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+Zarr = {rev = "complex-int-dtype-v0.11", subdir = "Zarr", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+ZarrCore = {rev = "complex-int-dtype-v0.11", subdir = "ZarrCore", url = "https://github.com/alex-s-gardner/Zarr.jl"}
+ZarrZlib = {rev = "complex-int-dtype-v0.11", subdir = "ZarrZlib", url = "https://github.com/alex-s-gardner/Zarr.jl"}
 
 [compat]
 GDAL = "1.13.0"
