@@ -1156,12 +1156,12 @@ version = "1.6.0+0"
 
 [[deps.Zarr]]
 deps = ["Preferences", "ZarrBlosc", "ZarrCore", "ZarrGCS", "ZarrHTTP", "ZarrS3", "ZarrZip", "ZarrZlib", "ZarrZstd"]
-git-tree-sha1 = "08bbacdc7f3cb37db01e6cf32413557f9b466ecd"
+git-tree-sha1 = "cfb5d27a88056702823610302e18cd592aed819d"
 repo-rev = "complex-int-dtype-v0.11"
 repo-subdir = "Zarr"
 repo-url = "https://github.com/alex-s-gardner/Zarr.jl"
 uuid = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
-version = "0.11.1"
+version = "0.11.2"
 
 [[deps.ZarrBlosc]]
 deps = ["Blosc", "JSON", "ZarrCore"]
@@ -1172,12 +1172,12 @@ version = "0.11.0"
 
 [[deps.ZarrCore]]
 deps = ["Base64", "CRC32c", "DateTimes64", "Dates", "DiskArrays", "JSON", "OrderedCollections", "Preferences", "Unicode"]
-git-tree-sha1 = "85518dfa9e5664d922b9af4e5a22d68537b757f6"
+git-tree-sha1 = "6d68e707b74f19ce09c9768595c1239454c779bf"
 repo-rev = "complex-int-dtype-v0.11"
 repo-subdir = "ZarrCore"
 repo-url = "https://github.com/alex-s-gardner/Zarr.jl"
 uuid = "77f5b75c-4c08-499f-ba13-550b0a0af171"
-version = "0.11.1"
+version = "0.11.2"
 
 [[deps.ZarrGCS]]
 deps = ["HTTP", "JSON", "URIs", "ZarrCore"]
@@ -1215,12 +1215,12 @@ version = "0.11.0"
 
 [[deps.ZarrZlib]]
 deps = ["ChunkCodecCore", "ChunkCodecLibZlib", "JSON", "ZarrCore"]
-git-tree-sha1 = "155db95cacb2351b29c232c4d4a23a5557f73c2a"
+git-tree-sha1 = "472c01796b7b4e1795cf408c2fdce80463f25c5c"
 repo-rev = "complex-int-dtype-v0.11"
 repo-subdir = "ZarrZlib"
 repo-url = "https://github.com/alex-s-gardner/Zarr.jl"
 uuid = "5ee7c756-6ac8-46ad-a53f-994846513443"
-version = "0.11.0"
+version = "0.11.1"
 
 [[deps.ZarrZstd]]
 deps = ["ChunkCodecCore", "ChunkCodecLibZstd", "JSON", "ZarrCore"]
