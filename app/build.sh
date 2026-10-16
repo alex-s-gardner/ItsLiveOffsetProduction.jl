@@ -17,6 +17,11 @@ mkdir -p "$(dirname "$out")"
 "${jl[@]}" --project="$here" -e 'import Pkg; Pkg.instantiate()'
 "${jl[@]}" --project=@jcdrv -m JuliaC --experimental --trim=safe --output-exe autorift_itslive_production \
     --bundle "$out" "$here"
+# Each JLL artifact is bundled whole. Headers, CMake files, static libraries and command-line tools are used
+# only to build against or to run by hand; the executable loads shared libraries (`lib/`) and data (`share/`).
+find "$out/share/julia/artifacts" -mindepth 2 -maxdepth 2 -type d \( -name include -o -name cmake -o -name bin \) \
+    -exec rm -rf {} +
+find "$out/share/julia/artifacts" -type f -name '*.a' -delete
 # The FFTW wisdom each run starts from (`ensure_environment` in src/cli.jl), one file per CPU model.
 mkdir -p "$out/share/autorift_itslive_production/fftw-wisdom"
 cp "$here"/wisdom/*.wisdom "$out/share/autorift_itslive_production/fftw-wisdom/"
