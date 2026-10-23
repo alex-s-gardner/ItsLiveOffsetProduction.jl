@@ -226,6 +226,7 @@ autorift_itslive_production-<version>-<platform>/
 ```
 
 The directory is relocatable as a whole: move or copy it anywhere and run `bin/autorift_itslive_production`.
+On Linux it needs only the host's C library (glibc); every other library comes from the bundle.
 
 ## Checking a bundle
 
