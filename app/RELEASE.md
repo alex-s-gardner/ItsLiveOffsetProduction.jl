@@ -196,8 +196,10 @@ versions/<version>/
   `latest.json` is the only object that changes.
 - `<platform>` is `linux-aarch64` (AWS Graviton), `linux-x86_64` (Intel and AMD) or `macos-arm64` (Apple
   silicon). `manifest.json` records where each was built and tested.
-- The `linux-x86_64` bundle is built for any x86_64 CPU (`generic`, `sandybridge`, `haswell` and `x86-64-v4`
-  code paths, chosen at run time). It has run on an AMD EPYC 9R45 only.
+- Each bundle runs on any CPU of its platform: it carries the code paths of Julia's own release binaries
+  and chooses one at run time (`linux-x86_64`: `generic`, `sandybridge`, `haswell`, `x86-64-v4`;
+  `linux-aarch64`: `generic` through `neoverse-512tvb`; `macos-arm64`: `generic`, `apple-m1`). The
+  `linux-x86_64` bundle has run on an AMD EPYC 9R45 only.
 
 Fetch, verify and unpack the current one:
 
@@ -224,6 +226,7 @@ autorift_itslive_production-<version>-<platform>/
 ```
 
 The directory is relocatable as a whole: move or copy it anywhere and run `bin/autorift_itslive_production`.
+On Linux it needs only the host's C library (glibc); every other library comes from the bundle.
 
 ## Checking a bundle
 
