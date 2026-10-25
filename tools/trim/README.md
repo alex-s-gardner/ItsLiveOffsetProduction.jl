@@ -349,7 +349,7 @@ plus EGM2008, or from `--dem`.
   process) — and every subswath's burst window read from a zip equals the unpacked `.SAFE`'s. ZipArchives
   and Mmap are no longer dependencies; the S1 path no longer formats dates with `Dates.format`/`lpad` or
   prints vectors in its messages. Tests: 3,171 pass.
-- **App** (`s1.jl`, `s1orbit.jl`): the `merge_bursts_in_swath`/`merge_swaths` mosaic, the TOPS carrier
+- **App** (`s1.jl`, `s1orbit.jl`): the burst mosaic, the TOPS carrier
   and its ISCE3 polynomial fit, the deramped eight-tap resample of each secondary burst through the offset
   lattice, the subswath bias inputs for a pair of two spacecraft, and the `:radar` packaging.
 - **Harness**:

@@ -950,11 +950,9 @@ point off the range sphere — by more than a hundred range samples on `S1A_IW_S
 Measured against COMPASS's own `azimuth.off`/`range.off` at 9,045 points over that pair's 27 bursts,
 the worst point differs by 5e-4 lines and 0.033 samples.
 
-**The secondary line is read from the orbit's clock.** `ImagePairGeometry.geo2rdr` carries two times
-that start at `midtime` and `orbit_midtime`, which the geogrid keeps apart deliberately: they differ by
-`0.5 nlines - (floor(nlines / 2) - 1)` lines — one for an even line count and one and a half for an odd
-one. Only the orbit time is where the satellite was, so it is the one the line index comes from; the
-other would put a subswath with an odd `lines_per_burst` (IW2 at 1515) half a line off its neighbors.
+**The secondary line is read from the orbit's clock.** `ImagePairGeometry.geo2rdr` carries an image-clock
+and an orbit-clock time; the orbit time is where the satellite was, so it is the one the line index comes
+from. The solve here starts both at `orbit_midtime`, so the two agree up to the epoch offset.
 
 **The offsets are computed from the solved time and range, not through `azimuth_index`.** Those helpers
 round to a whole line and sample for the geogrid's benefit, which is exactly the sub-pixel part a

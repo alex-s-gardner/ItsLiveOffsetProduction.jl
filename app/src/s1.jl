@@ -1,10 +1,12 @@
 # Sentinel-1 IW SLC pairs: the mosaic geometry geogrid is handed, the reference's bursts merged into the
-# `merge_swaths` mosaic, the secondary resampled onto it burst by burst, and the product's metadata.
+# mosaic, the secondary resampled onto it burst by burst, and the product's metadata.
 #
-# The pipeline being reproduced is `s1_isce3.process_slc`: COMPASS coregisters each secondary burst onto
-# its reference burst, `merge_bursts_in_swath` and `merge_swaths` stack the bursts and subswaths, and
-# `read_slc_gdal` takes the amplitude. Here the coregistration is an offset field solved on a lattice from
-# the two orbits and a DEM, and the resample an eight-tap sinc over the deramped secondary burst.
+# Each secondary burst is coregistered onto its reference burst, as `s1_isce3.process_slc` does with
+# COMPASS: here through an offset field solved on a lattice from the two orbits and a DEM, and an eight-tap
+# sinc over the deramped secondary burst. The bursts are merged as ISCE2's topsApp merges them
+# (`TopsProc/runMergeBursts.py`, `VRTManager.py`): each burst at its own sensing time, over the valid
+# window its reference and coregistered secondary share, a later burst or subswath overwriting an earlier
+# one where they overlap.
 
 const S1Product = SLCDatasets.Sentinel1Product
 const S1_SWATHS = 1:3
@@ -93,46 +95,58 @@ end
 # ---------------------------------------------------------------------------
 
 """
+    MosaicBox(p, swaths)
+
+The merged grid the subswaths are laid on, ISCE2's `mergeBox` (`TopsProc/runMergeBursts.py:55-82`): line 0
+at the earliest subswath's first burst, sample 0 at the nearest subswath's starting range, and extents
+reaching the latest burst's last line and the farthest subswath's last sample, at the earliest subswath's
+line interval and the nearest's sample spacing.
+"""
+struct MosaicBox
+    sensing_start::SLCDatasets.UtcTime
+    starting_range::Float64
+    dt::Float64
+    dr::Float64
+    nlines::Int
+    nsamples::Int
+end
+
+function MosaicBox(p::S1Product, swaths)
+    ann = [SLCDatasets.annotation(p, sw) for sw in swaths]
+    t0 = first(ann[1].burst_start)
+    top = argmin(i -> SLCDatasets.seconds_between(t0, first(ann[i].burst_start)), eachindex(ann))
+    left = argmin(i -> ann[i].starting_range, eachindex(ann))
+    start = first(ann[top].burst_start)
+    dt = ann[top].azimuth_time_interval
+    dr = ann[left].range_pixel_spacing
+    near = ann[left].starting_range
+    stop = maximum(a -> SLCDatasets.seconds_between(start, last(a.burst_start)) + (a.lines_per_burst - 1) * a.azimuth_time_interval, ann)
+    far = maximum(a -> a.starting_range + (a.samples_per_burst - 1) * a.range_pixel_spacing, ann)
+    return MosaicBox(start, near, dt, dr, round(Int, stop / dt + 1), round(Int, (far - near) / dr + 1))
+end
+
+"""
     s1_mosaic(p, swaths) -> (RadarCoordinate, UtcTime)
 
-The merged radar grid geogrid is handed for product `p` (`loadMetadataSlc`): the range origin, spacing,
-PRF, wavelength and orbit of the near subswath; the sample count to the far subswath's far edge plus the
-floored range offset to it; and the line count `merge_swaths` lays out, which adds a whole merged subswath
-length to the last burst's start. Returns the absolute sensing start beside it, which the pair's interval
-is taken from.
+The merged radar grid geogrid is handed for product `p`: the [`MosaicBox`](@ref) with the PRF, wavelength
+and orbit of the near subswath. Returns the absolute sensing start beside it, which the pair's interval is
+taken from.
 """
 function s1_mosaic(p::S1Product, swaths)
     sws = collect(swaths)
-    ann = [SLCDatasets.annotation(p, sw) for sw in sws]
-    shape = [(a.lines_per_burst, a.samples_per_burst) for a in ann]
-    ilo = argmin(i -> ann[i].starting_range, eachindex(ann))
-    ihi = argmax(i -> ann[i].starting_range, eachindex(ann))
-    lo, hi = ann[ilo], ann[ihi]
-    dr = lo.range_pixel_spacing
-    adt = lo.azimuth_time_interval
-    swath_lines = [1 + round(Int, (SLCDatasets.seconds_between(first(a.burst_start), last(a.burst_start)) +
-                                   (shape[k][1] - 1) * a.azimuth_time_interval) / a.azimuth_time_interval)
-                   for (k, a) in enumerate(ann)]
-    start = first(ann[1].burst_start)
-    for a in ann
-        SLCDatasets.seconds_between(start, first(a.burst_start)) < 0 && (start = first(a.burst_start))
-    end
-    span = -Inf
-    for (a, n) in zip(ann, swath_lines)
-        span = max(span, SLCDatasets.seconds_between(start, last(a.burst_start)) + (n - 1) * a.azimuth_time_interval)
-    end
-    nlines = 1 + round(Int, span / adt)
-    nsamples = shape[ihi][2] + floor(Int, (hi.starting_range - lo.starting_range) / dr)
+    box = MosaicBox(p, sws)
+    ilo = argmin(i -> SLCDatasets.annotation(p, sws[i]).starting_range, eachindex(sws))
+    lo = SLCDatasets.annotation(p, sws[ilo])
     base = SLCDatasets.merge_bursts(collect(SLCDatasets.bursts(p, sws[ilo])))
     c = radar_coordinate(base)
     base_start = first(base.backend.annotation.burst_start)
-    kwargs = (; orbit = c.orbit, starting_range = lo.starting_range, dr,
+    kwargs = (; orbit = c.orbit, starting_range = box.starting_range, dr = box.dr,
               # `c.sensing_start` is seconds on the orbit's clock at the near subswath's first burst.
-              sensing_start = c.sensing_start + SLCDatasets.seconds_between(base_start, start),
-              prf = 1 / adt, nsamples, nlines, look_side = c.look_side, wavelength = lo.wavelength,
-              orbit_epoch_offset = c.orbit_epoch_offset)
+              sensing_start = c.sensing_start + SLCDatasets.seconds_between(base_start, box.sensing_start),
+              prf = 1 / box.dt, nsamples = box.nsamples, nlines = box.nlines, look_side = c.look_side,
+              wavelength = lo.wavelength, orbit_epoch_offset = c.orbit_epoch_offset)
     coord = ImagePairGeometry.RadarCoordinate(; kwargs..., incidence_angle = ImagePairGeometry.incidence_angle(; kwargs...))
-    return coord, start
+    return coord, box.sensing_start
 end
 
 """
@@ -169,164 +183,127 @@ function s1_setup(c::Job, orbit_dir::String, scratch::String)
 end
 
 # ---------------------------------------------------------------------------
-# The reference mosaic
+# The merge
 # ---------------------------------------------------------------------------
 
-# `bursts[-1].last_valid_line` of a subswath, 0-based.
-_lvl_last(a) = a.last_valid_line[end] - 1
-
 """
-    SwathAmplitude <: AbstractMatrix{Float32}
+    valid_window(ra, sa, i) -> NTuple{4,Int}
 
-One subswath's bursts merged as `merge_bursts_in_swath` merges them, read a window at a time: the azimuth
-seam halfway through each overlap, the first burst's valid samples applied to every burst. `pieces` is
-the merge as `(merged rows, raster rows, columns)` placements, applied in order, so that a line two
-bursts both write keeps the later one.
+Burst `i`'s valid window on the reference burst's grid, zero-based first and last line and sample: the
+window the reference and its coregistered secondary share, `adjustValidLineSample`
+(`TopsProc/runBurstIfg.py:137-151`) over the annotations' valid rectangles. `sa === nothing` gives the
+reference's own.
+
+The window is ISCE2's (`Sensor/TOPS/Sentinel1.py:662-676`), which keeps every valid line but ends one
+sample before the annotation's last valid sample: `numValidSamples = lastValidSample - firstValidSample`
+with `lastValidSample` the annotation's zero-based inclusive index, read as a half-open range.
 """
-struct SwathAmplitude{R} <: AbstractMatrix{Float32}
-    raster::R
-    pieces::Vector{NTuple{3,UnitRange{Int}}}
-    dims::Tuple{Int,Int}
+function valid_window(ra, sa, i::Int)
+    # SLCDatasets' bounds are one-based and inclusive; `- 1` makes them zero-based, and the samples' extra
+    # `- 1` drops the annotation's last valid sample as ISCE2 does.
+    w(a) = (a.first_valid_line[i] - 1, a.last_valid_line[i] - 1, a.first_valid_sample[i] - 1, a.last_valid_sample[i] - 2)
+    r = w(ra)
+    sa === nothing && return r
+    s = w(sa)
+    return (max(r[1], s[1]), min(r[2], s[2]), max(r[3], s[3]), min(r[4], s[4]))
 end
 
-function SwathAmplitude(p::S1Product, swath::Int, raster::R) where {R}
-    a = SLCDatasets.annotation(p, swath)
-    n = SLCDatasets.nbursts(a)
-    lpb, spb = a.lines_per_burst, a.samples_per_burst
-    dt = a.azimuth_time_interval
-    burst_rows(i, rows) = ((i - 1) * lpb) .+ rows
-    n == 1 && return SwathAmplitude(raster, [(1:lpb, burst_rows(1, 1:lpb), 1:spb)], (lpb, spb))
-    fvl = a.first_valid_line .- 1
-    lvl = a.last_valid_line .- 1
-    fvs = a.first_valid_sample .- 1
-    lvs = a.last_valid_sample .- 1
-    lims = [(s = round(Int, (SLCDatasets.seconds_between(first(a.burst_start), a.burst_start[i]) + fvl[i] * dt) / dt);
-             (s, s + (lvl[i] - fvl[i]) + 1)) for i in 1:n]
-    nlines = 1 + round(Int, (SLCDatasets.seconds_between(first(a.burst_start), last(a.burst_start)) +
-                             (lpb - 1) * dt) / dt)
-    pieces = map(1:n) do i
-        prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
-        nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
-        bstart, bend = fvl[i] + prev, 1 + lvl[i] - nxt
-        mstart, mend = lims[i][1] + prev, lims[i][2] - nxt
-        ((mstart + 1):mend, burst_rows(i, (bstart + 1):bend), (fvs[i] + 1):lvs[i])
-    end
-    return SwathAmplitude(raster, pieces, (nlines, spb))
-end
-
-Base.size(a::SwathAmplitude) = a.dims
-
-function Base.getindex(a::SwathAmplitude, rows::AbstractUnitRange, cols::AbstractUnitRange)
-    checkbounds(a, rows, cols)
-    out = zeros(Float32, length(rows), length(cols))
-    for (mr, rr, cc) in a.pieces
-        wr, wc = intersect(rows, mr), intersect(cols, cc)
-        (isempty(wr) || isempty(wc)) && continue
-        src = rr[(first(wr) - first(mr) + 1):(last(wr) - first(mr) + 1)]
-        out[wr .- (first(rows) - 1), wc .- (first(cols) - 1)] = abs.(Matrix{Complex{Int16}}(a.raster[src, wc]))
-    end
-    return out
-end
-
-@_window_indexing SwathAmplitude
-
 """
-    SwathPlacement
+    MergePiece
 
-Which window of one merged subswath goes where in the `merge_swaths` mosaic: the azimuth window is
-cropped and moved to the subswath's azimuth offset, the range window cropped and kept at its own column
-indices (`s1_isce3.py:487-500`).
+One burst's part of the mosaic, `VRTConstructor.addBurst` with `validOnly` (`TopsProc/VRTManager.py:165-205`):
+the burst's valid window, `lines` x `samples` zero-based on its own grid, lands at `mosaic_rows` x
+`mosaic_cols`, offset from those indices by the burst's sensing time and starting range on the
+[`MosaicBox`](@ref). `swath` and `burst` name it.
 """
-struct SwathPlacement
+struct MergePiece
     swath::Int
+    burst::Int
+    lines::UnitRange{Int}
+    samples::UnitRange{Int}
     mosaic_rows::UnitRange{Int}
     mosaic_cols::UnitRange{Int}
-    swath_rows::UnitRange{Int}
-    swath_cols::UnitRange{Int}
 end
 
 """
-    mosaic_layout(p, swaths, shapes) -> (Vector{SwathPlacement}, (rows, cols))
+    merge_pieces(rp, sp, swaths) -> (Vector{MergePiece}, MosaicBox)
 
-Where each merged subswath of shape `shapes[k]` lands in the mosaic, and the mosaic's size. Every subswath
-but the far one gives up 64 samples at its far edge, `invalid_pixel_buffer`.
+Every burst of `swaths` in the order `mergeBurstsVirtual` adds them, subswath by subswath and burst by
+burst, so that a later piece overwrites an earlier one where they overlap. The windows are the reference's
+and secondary's shared ones ([`valid_window`](@ref)); both mosaics use the same pieces, so the reference and
+the secondary carry the same burst in every pixel.
 """
-function mosaic_layout(p::S1Product, swaths, shapes::Vector{Tuple{Int,Int}})
+function merge_pieces(rp::S1Product, sp::S1Product, swaths)
     sws = collect(swaths)
-    ann = [SLCDatasets.annotation(p, sw) for sw in sws]
-    dr = first(ann).range_pixel_spacing
-    dt = first(ann).azimuth_time_interval
-    starts = [first(a.burst_start) for a in ann]
-    sensing_start = starts[1]
-    for s in starts
-        SLCDatasets.seconds_between(sensing_start, s) < 0 && (sensing_start = s)
+    box = MosaicBox(rp, sws)
+    pieces = MergePiece[]
+    for sw in sws
+        ra, sa = SLCDatasets.annotation(rp, sw), SLCDatasets.annotation(sp, sw)
+        SLCDatasets.nbursts(sa) >= SLCDatasets.nbursts(ra) || throw(ArgumentError(
+            "the secondary's IW" * string(sw) * " has fewer bursts than the reference's"))
+        xoff = round(Int, (ra.starting_range - box.starting_range) / box.dr)
+        for i in 1:SLCDatasets.nbursts(ra)
+            yoff = round(Int, SLCDatasets.seconds_between(box.sensing_start, ra.burst_start[i]) / box.dt)
+            fl, ll, fs, ls = valid_window(ra, sa, i)
+            (fl <= ll && fs <= ls) || continue
+            push!(pieces, MergePiece(sw, i, fl:ll, fs:ls, (yoff + fl + 1):(yoff + ll + 1), (xoff + fs + 1):(xoff + ls + 1)))
+        end
     end
-    span = -Inf
-    for (a, sh) in zip(ann, shapes)
-        span = max(span, SLCDatasets.seconds_between(sensing_start, last(a.burst_start)) + (sh[1] - 1) * a.azimuth_time_interval)
-    end
-    total_az = 1 + round(Int, span / dt)
-    rng_offsets = [sw == first(sws) ? 0 :
-                   floor(Int, (SLCDatasets.annotation(p, sw).starting_range - first(ann).starting_range) / dr)
-                   for sw in sws]
-    total_rng = last(shapes)[2] + floor(Int, (last(ann).starting_range - first(ann).starting_range) / dr)
-    places = map(eachindex(sws)) do k
-        a, nrows = ann[k], shapes[k][1]
-        fvl, lvl = a.first_valid_line[1] - 1, a.last_valid_line[1] - 1
-        fvs, lvs = a.first_valid_sample[1] - 1, a.last_valid_sample[1] - 1
-        az_offset = floor(Int, SLCDatasets.seconds_between(sensing_start, starts[k]) / dt)
-        rng_offset = rng_offsets[k] + fvs
-        rng_end = rng_offset + (lvs - fvs)
-        buffer = sws[k] == maximum(sws) ? 0 : 64
-        slc_az_end = SLCDatasets.nbursts(a) > 1 ? nrows - _lvl_last(a) : lvl
-        merged_az_end = SLCDatasets.nbursts(a) > 1 ? az_offset + nrows - _lvl_last(a) - fvl : az_offset + (lvl - fvl)
-        SwathPlacement(sws[k], (az_offset + 1):merged_az_end, (rng_offset + 1):(rng_end - buffer),
-                       (fvl + 1):slc_az_end, (fvs + 1):(lvs - buffer))
-    end
-    return (places, (total_az, total_rng))
+    return pieces, box
 end
 
 """
-    S1Mosaic <: AbstractMatrix{Float32}
+    BurstMosaic <: AbstractMatrix{Float32}
 
-Merged subswaths stacked as `merge_swaths` stacks them, read a window at a time, first-come in subswath
-order: a pixel already non-zero is not overwritten.
+Bursts merged as topsApp merges them, read a window at a time: each [`MergePiece`](@ref) in order, a later
+one overwriting an earlier one, as GDAL renders the sources of a VRT band. `read!(dest, burst, lines,
+samples)` writes the amplitude of burst `burst`'s zero-based `lines` x `samples` into `dest`.
 """
-struct S1Mosaic{S} <: AbstractMatrix{Float32}
-    swaths::Vector{S}
-    places::Vector{SwathPlacement}
+struct BurstMosaic{B} <: AbstractMatrix{Float32}
+    bursts::B
+    pieces::Vector{MergePiece}
     dims::Tuple{Int,Int}
 end
 
-Base.size(m::S1Mosaic) = m.dims
+Base.size(m::BurstMosaic) = m.dims
 
-function Base.getindex(m::S1Mosaic, rows::AbstractUnitRange, cols::AbstractUnitRange)
+function Base.getindex(m::BurstMosaic, rows::AbstractUnitRange, cols::AbstractUnitRange)
     checkbounds(m, rows, cols)
     out = zeros(Float32, length(rows), length(cols))
-    for (k, q) in enumerate(m.places)
-        mr = intersect(rows, q.mosaic_rows)
-        isempty(mr) && continue
-        mc = intersect(cols, q.mosaic_cols)
-        isempty(mc) && continue
-        r0 = first(q.swath_rows) + (first(mr) - first(q.mosaic_rows))
-        c0 = first(q.swath_cols) + (first(mc) - first(q.mosaic_cols))
-        got = m.swaths[k][r0:(r0 + length(mr) - 1), c0:(c0 + length(mc) - 1)]
-        i0, j0 = first(mr) - first(rows), first(mc) - first(cols)
-        for j in axes(got, 2), i in axes(got, 1)
-            v = got[i, j]
-            (out[i0 + i, j0 + j] == 0 && v != 0) && (out[i0 + i, j0 + j] = v)
-        end
+    # The part `inner` of range `outer` re-expressed on the range `target` that `outer` maps to.
+    shift(inner, outer, target) = (inner .- first(outer)) .+ first(target)
+    for q in m.pieces
+        mr, mc = intersect(rows, q.mosaic_rows), intersect(cols, q.mosaic_cols)
+        (isempty(mr) || isempty(mc)) && continue
+        dest = view(out, shift(mr, rows, 1:length(rows)), shift(mc, cols, 1:length(cols)))
+        read_burst!(dest, m.bursts, q, shift(mr, q.mosaic_rows, q.lines), shift(mc, q.mosaic_cols, q.samples))
     end
     return out
 end
 
-@_window_indexing S1Mosaic
+@_window_indexing BurstMosaic
 
-function reference_mosaic(p::S1Product, raster_of)
-    sws = p.swaths
-    lazy = [SwathAmplitude(p, sw, raster_of(sw)) for sw in sws]
-    places, dims = mosaic_layout(p, sws, [size(x) for x in lazy])
-    return S1Mosaic(lazy, places, dims)
+"""
+    ReferenceBursts
+
+The reference's bursts, each subswath's raster stacking its bursts `lines_per_burst` rows apart.
+"""
+struct ReferenceBursts{R}
+    rasters::Dict{Int,R}
+    lines_per_burst::Dict{Int,Int}
+end
+
+function read_burst!(dest, r::ReferenceBursts, q::MergePiece, lines::UnitRange{Int}, samples::UnitRange{Int})
+    rows = ((q.burst - 1) * r.lines_per_burst[q.swath] + 1) .+ lines
+    dest .= abs.(Matrix{Complex{Int16}}(r.rasters[q.swath][rows, first(samples) + 1:last(samples) + 1]))
+    return dest
+end
+
+function reference_mosaic(rp::S1Product, sp::S1Product, raster_of)
+    pieces, box = merge_pieces(rp, sp, rp.swaths)
+    rasters = Dict(sw => raster_of(sw) for sw in rp.swaths)
+    lpb = Dict(sw => SLCDatasets.annotation(rp, sw).lines_per_burst for sw in rp.swaths)
+    return BurstMosaic(ReferenceBursts(rasters, lpb), pieces, (box.nlines, box.nsamples))
 end
 
 # ---------------------------------------------------------------------------
@@ -444,86 +421,53 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    BurstPlacement
+    SecondaryBurst
 
-One secondary burst's part of the merged subswath: the burst, its rows in the stacked raster, its carrier,
-the offset field onto the reference burst, its own valid rectangle (zero-based first/last line and
-sample), the reference burst's zero-based output `lines` and `samples` it covers, the merged subswath's
-one-based rows and columns they land on — positionally, so `mosaic_rows[t]` carries `lines[t]` — and the
-secondary burst's own `(lines, samples)`, which bounds what its source offers.
+One secondary burst resampled onto its reference burst: its rows in the stacked raster, its carrier, the
+offset field onto the reference burst, its own valid rectangle (zero-based first/last line and sample) and
+its own `(lines, samples)`, which bounds what its source offers.
 """
-struct BurstPlacement
-    burst::Int
+struct SecondaryBurst
     source_rows::UnitRange{Int}
     carrier::CarrierFit
     dl::LatticeOffsets
     ds::LatticeOffsets
     svalid::NTuple{4,Int}
-    lines::UnitRange{Int}
-    samples::UnitRange{Int}
-    mosaic_rows::UnitRange{Int}
-    mosaic_cols::UnitRange{Int}
     extent::Tuple{Int,Int}
 end
 
 """
-    ResampledSwath <: AbstractMatrix{Float32}
+    SecondaryBursts
 
-The secondary's amplitude on the reference's merged subswath grid, resampled a window at a time. The
-placement is the reference's own seam arithmetic applied to the secondary, as `merge_bursts_in_swath`
-applies it. Each burst's carrier and offset field are built once, at construction.
+The secondary's bursts, each resampled onto its reference burst on demand. Each burst's carrier and offset
+field are built once, at construction.
 """
-struct ResampledSwath{R} <: AbstractMatrix{Float32}
-    source::R
-    places::Vector{BurstPlacement}
-    dims::Tuple{Int,Int}
+struct SecondaryBursts{R}
+    sources::Dict{Int,R}
+    bursts::Dict{Tuple{Int,Int},SecondaryBurst}
 end
 
-function ResampledSwath(rp::S1Product, sp::S1Product, swath::Int, dem::D, sraster::R) where {D,R}
-    a = SLCDatasets.annotation(rp, swath)
-    sa = SLCDatasets.annotation(sp, swath)
-    n = SLCDatasets.nbursts(a)
-    lpb, spb = a.lines_per_burst, a.samples_per_burst
-    # The source burst's shape is the secondary's own, which need not be the reference's: it sets where
-    # burst `i` starts in the stacked raster, the carrier's middle line, and every bound `ResampSlc` takes
-    # off its source grid (`s1_resample.py` builds the radar grid, Doppler LUT and carrier from the
-    # secondary burst).
-    slpb, sspb = sa.lines_per_burst, sa.samples_per_burst
-    dt = a.azimuth_time_interval
-    fvl = a.first_valid_line .- 1
-    lvl = a.last_valid_line .- 1
-    fvs = a.first_valid_sample .- 1
-    lvs = a.last_valid_sample .- 1
-    lims = [(s = round(Int, (SLCDatasets.seconds_between(first(a.burst_start), a.burst_start[i]) + fvl[i] * dt) / dt);
-             (s, s + (lvl[i] - fvl[i]) + 1)) for i in 1:n]
-    nlines = n == 1 ? lpb :
-             1 + round(Int, (SLCDatasets.seconds_between(first(a.burst_start), last(a.burst_start)) + (lpb - 1) * dt) / dt)
-    sb = collect(SLCDatasets.bursts(sp, swath))
-    rb = collect(SLCDatasets.bursts(rp, swath))
-    length(sb) >= n || throw(ArgumentError("the secondary's IW" * string(swath) * " has fewer bursts than the reference's"))
-    tasks = map(1:n) do i
+function SecondaryBursts(rp::S1Product, sp::S1Product, dem::D, raster_of) where {D}
+    sources = Dict(sw => raster_of(sw) for sw in rp.swaths)
+    jobs = [(sw, i) for sw in rp.swaths for i in 1:SLCDatasets.nbursts(SLCDatasets.annotation(rp, sw))]
+    tasks = map(jobs) do (sw, i)
         Threads.@spawn begin
-            ss = sb[i]
+            a, sa = SLCDatasets.annotation(rp, sw), SLCDatasets.annotation(sp, sw)
+            # The source burst's shape is the secondary's own, which need not be the reference's: it sets
+            # where burst `i` starts in the stacked raster, the carrier's middle line, and every bound
+            # `ResampSlc` takes off its source grid.
+            slpb, sspb = sa.lines_per_burst, sa.samples_per_burst
+            ss = SLCDatasets.bursts(sp, sw)[i]
             cs = radar_coordinate(ss)
             carrier = CarrierFit(TopsCarrier(ss, cs, slpb), slpb, sspb)
-            dl, ds = offset_lattice(radar_coordinate(rb[i]), cs, dem, lpb, spb)
-            prev = i > 1 ? fld(lims[i - 1][2] - lims[i][1], 2) : 0
-            nxt = i < n ? fld(lims[i][2] - lims[i + 1][1], 2) : 0
-            bstart, bend = n == 1 ? (0, lpb) : (fvl[i] + prev, 1 + lvl[i] - nxt)
-            mstart, mend = n == 1 ? (0, lpb) : (lims[i][1] + prev, lims[i][2] - nxt)
-            cols = n == 1 ? (1:spb) : ((fvs[i] + 1):min(lvs[i], spb))
-            BurstPlacement(i, ((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds,
-                           (sa.first_valid_line[i] - 1, sa.last_valid_line[i] - 1,
-                            sa.first_valid_sample[i] - 1, sa.last_valid_sample[i] - 1),
-                           bstart:(bend - 1), (first(cols) - 1):(last(cols) - 1),
-                           (mstart + 1):mend, cols, (slpb, sspb))
+            dl, ds = offset_lattice(radar_coordinate(SLCDatasets.bursts(rp, sw)[i]), cs, dem,
+                                    a.lines_per_burst, a.samples_per_burst)
+            SecondaryBurst(((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds, valid_window(sa, nothing, i), (slpb, sspb))
         end
     end
-    places = BurstPlacement[fetch(t)::BurstPlacement for t in tasks]
-    return ResampledSwath(sraster, places, (nlines, spb))
+    bursts = Dict{Tuple{Int,Int},SecondaryBurst}(j => fetch(t)::SecondaryBurst for (j, t) in zip(jobs, tasks))
+    return SecondaryBursts(sources, bursts)
 end
-
-Base.size(r::ResampledSwath) = r.dims
 
 """
     deramped_burst!(buf, raster, rows, cols, carrier, origin) -> view
@@ -565,11 +509,12 @@ function zero_outside_valid!(A::AbstractMatrix{ComplexF32}, valid::NTuple{4,Int}
     return A
 end
 
-# One burst's contribution to a window over the burst-local output indices `lines` x `samples`, into
-# `dest`. The band read is the support those outputs reach, clamped to the burst: a pixel whose support
-# leaves the burst is rejected by the resample and never read.
-function resample_piece!(dest::AbstractMatrix{Float32}, r::ResampledSwath, p::BurstPlacement, lines::UnitRange{Int},
-                         samples::UnitRange{Int}, scratch::Matrix{ComplexF32})
+# Burst `q`'s resampled amplitude over its zero-based output `lines` x `samples`, into `dest`. The band read
+# is the support those outputs reach, clamped to the burst: a pixel whose support leaves the burst is
+# rejected by the resample and never read.
+function read_burst!(dest::AbstractMatrix{Float32}, r::SecondaryBursts, q::MergePiece, lines::UnitRange{Int},
+                     samples::UnitRange{Int})
+    p = r.bursts[(q.swath, q.burst)]
     slpb, sspb = p.extent
     ymin, ymax, xmin, xmax = support_bounds(p.dl, p.ds, lines, samples)
     brows = clamp(floor(Int, ymin) - 3, 1, slpb):clamp(ceil(Int, ymax) + 4, 1, slpb)
@@ -577,44 +522,20 @@ function resample_piece!(dest::AbstractMatrix{Float32}, r::ResampledSwath, p::Bu
     (isempty(brows) || isempty(bcols)) && return dest
     origin = (first(brows) - 1, first(bcols) - 1)
     srows = (first(p.source_rows) - 1 + first(brows)):(first(p.source_rows) - 1 + last(brows))
-    src = deramped_burst!(scratch, r.source, srows, bcols, p.carrier, origin)
+    scratch = Matrix{ComplexF32}(undef, length(brows), length(bcols))
+    src = deramped_burst!(scratch, r.sources[q.swath], srows, bcols, p.carrier, origin)
     zero_outside_valid!(src, p.svalid, origin)
     return resample!(dest, src, p.dl, p.ds, lines, samples; origin, extent = p.extent, doppler = p.extent)
 end
 
-function Base.getindex(r::ResampledSwath, rows::AbstractUnitRange, cols::AbstractUnitRange)
-    checkbounds(r, rows, cols)
-    out = zeros(Float32, length(rows), length(cols))
-    slpb, sspb = first(r.places).extent
-    scratch = Matrix{ComplexF32}(undef, slpb, sspb)
-    for p in r.places
-        mr = intersect(rows, p.mosaic_rows)
-        isempty(mr) && continue
-        mc = intersect(cols, p.mosaic_cols)
-        isempty(mc) && continue
-        t0 = first(mr) - first(p.mosaic_rows)
-        u0 = first(mc) - first(p.mosaic_cols)
-        lines = (first(p.lines) + t0):(first(p.lines) + t0 + length(mr) - 1)
-        samples = (first(p.samples) + u0):(first(p.samples) + u0 + length(mc) - 1)
-        dest = view(out, (first(mr) - first(rows) + 1):(last(mr) - first(rows) + 1),
-                    (first(mc) - first(cols) + 1):(last(mc) - first(cols) + 1))
-        resample_piece!(dest, r, p, lines, samples, scratch)
-    end
-    return out
-end
-
-@_window_indexing ResampledSwath
-
 function secondary_mosaic(rp::S1Product, sp::S1Product, dem::D, raster_of) where {D}
-    sws = rp.swaths
-    lazy = [ResampledSwath(rp, sp, sw, dem, raster_of(sw)) for sw in sws]
-    places, dims = mosaic_layout(rp, sws, [size(r) for r in lazy])
-    return S1Mosaic(lazy, places, dims)
+    pieces, box = merge_pieces(rp, sp, rp.swaths)
+    return BurstMosaic(SecondaryBursts(rp, sp, dem, raster_of), pieces, (box.nlines, box.nsamples))
 end
 
 # A product's subswath measurement raster: a file of a `.SAFE`, a zip's member inflated, or extracted bursts.
 function _swath_raster(p::S1Product, sw::Int)
-    return SLCDatasets.burst_raster(first(collect(SLCDatasets.bursts(p, sw))).backend).raster
+    return SLCDatasets.burst_raster(SLCDatasets.bursts(p, sw)[1].backend).raster
 end
 
 """
@@ -642,7 +563,7 @@ function _s1_imagery(s::RadarSetup, dem::D, rraster::F1, sraster::F2; dir::Strin
     lx, ly = permutedims(g.location_x), permutedims(g.location_y)
     sentinel = Int32(g.nodata.output)
     declined = _sentinel_declined(lx, ly, sentinel)
-    ref = reference_mosaic(s.early_product, rraster)
+    ref = reference_mosaic(s.early_product, s.late_product, rraster)
     co = s.pair.coordinate
     (co.nlines, co.nsamples) == size(ref) || throw(DimensionMismatch(
         "the geogrid was built on a different mosaic than the imagery"))
@@ -679,8 +600,8 @@ annotations, and the acquisition times as the two mosaics' sensing starts.
 """
 function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::Float64)
     rp, sp = s.early_product, s.late_product
-    _, t1 = s1_mosaic(rp, rp.swaths)
-    _, t2 = s1_mosaic(sp, rp.swaths)
+    t1 = MosaicBox(rp, rp.swaths).sensing_start
+    t2 = MosaicBox(sp, rp.swaths).sensing_start
     a1, a2 = SLCDatasets.annotation(rp, first(rp.swaths)), SLCDatasets.annotation(sp, first(rp.swaths))
     n1, n2 = _s1_name(rp), _s1_name(sp)
     f1, f2 = split(n1, '_'), split(n2, '_')
