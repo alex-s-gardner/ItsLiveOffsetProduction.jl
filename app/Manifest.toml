@@ -496,7 +496,7 @@ version = "0.1.1"
 
 [[deps.ImagePairGeometry]]
 deps = ["Extents", "FastGeoProjections", "GeoFormatTypes", "GeoInterface", "StaticArrays"]
-git-tree-sha1 = "87282435bc30fbd02f88b39a107d9a662ac31f20"
+git-tree-sha1 = "fc27e4f7c8723a2cfd43b89217d6a48794b8b1ed"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"
 uuid = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
