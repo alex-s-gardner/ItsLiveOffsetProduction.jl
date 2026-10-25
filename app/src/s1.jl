@@ -187,25 +187,59 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    valid_window(ra, sa, i) -> NTuple{4,Int}
+    valid_window(a, i) -> NTuple{4,Int}
 
-Burst `i`'s valid window on the reference burst's grid, zero-based first and last line and sample: the
-window the reference and its coregistered secondary share, `adjustValidLineSample`
-(`TopsProc/runBurstIfg.py:137-151`) over the annotations' valid rectangles. `sa === nothing` gives the
-reference's own.
+Burst `i`'s valid window in annotation `a`, zero-based first and last line and sample.
 
 The window is ISCE2's (`Sensor/TOPS/Sentinel1.py:662-676`), which keeps every valid line but ends one
 sample before the annotation's last valid sample: `numValidSamples = lastValidSample - firstValidSample`
 with `lastValidSample` the annotation's zero-based inclusive index, read as a half-open range.
 """
-function valid_window(ra, sa, i::Int)
-    # SLCDatasets' bounds are one-based and inclusive; `- 1` makes them zero-based, and the samples' extra
-    # `- 1` drops the annotation's last valid sample as ISCE2 does.
-    w(a) = (a.first_valid_line[i] - 1, a.last_valid_line[i] - 1, a.first_valid_sample[i] - 1, a.last_valid_sample[i] - 2)
-    r = w(ra)
-    sa === nothing && return r
-    s = w(sa)
-    return (max(r[1], s[1]), min(r[2], s[2]), max(r[3], s[3]), min(r[4], s[4]))
+function valid_window(a, i::Int)
+    l, s = SLCDatasets.valid_lines(a, i), SLCDatasets.valid_samples(a, i)
+    return (first(l) - 1, last(l) - 1, first(s) - 1, last(s) - 2)
+end
+
+"""
+    coregistered_window(rwin, swin, dl, ds) -> NTuple{4,Int}
+
+The window on the reference burst that the reference and its coregistered secondary share, zero-based
+first and last line and sample: the part of the reference's [`valid_window`](@ref) `rwin` whose resampled
+pixels take all eight sinc taps of [`resample!`](@ref) from inside the secondary's valid window `swin`.
+This is the guarantee topsApp's `adjustValidSampleLine` (`TopsProc/runFineResamp.py:214-273`) trims for,
+tested directly on the offsets `dl`, `ds`.
+
+Each edge moves inward until its whole row or column is inside; the rows and columns behind it then are
+too, as a position advances with its index. Rows are tested along all of `rwin`'s samples, columns along
+the rows kept.
+"""
+function coregistered_window(rwin, swin, dl, ds)
+    rfl, rll, rfs, rls = rwin
+    sfl, sll, sfs, sls = swin
+    # One-based source position `y` reads one-based rows `floor(y) - 3:floor(y) + 4`, inside zero-based
+    # `sfl:sll` when `sfl + 4 <= y < sll - 2`. Columns likewise.
+    inside(lo, hi, first, last) = lo >= first + 4 && hi < last - 2
+    fl, ll = _shrink(rfl, rll) do l
+        ymin, ymax = support_bounds(dl, ds, l:l, rfs:rls)
+        inside(ymin, ymax, sfl, sll)
+    end
+    fl <= ll || return (fl, ll, rfs, rls)
+    fs, ls = _shrink(rfs, rls) do s
+        _, _, xmin, xmax = support_bounds(dl, ds, fl:ll, s:s)
+        inside(xmin, xmax, sfs, sls)
+    end
+    return (fl, ll, fs, ls)
+end
+
+# `a:b` narrowed from each end until `keep` holds at both ends.
+function _shrink(keep, a::Int, b::Int)
+    while a <= b && !keep(a)
+        a += 1
+    end
+    while a <= b && !keep(b)
+        b -= 1
+    end
+    return a, b
 end
 
 """
@@ -226,25 +260,24 @@ struct MergePiece
 end
 
 """
-    merge_pieces(rp, sp, swaths) -> (Vector{MergePiece}, MosaicBox)
+    merge_pieces(rp, bursts) -> (Vector{MergePiece}, MosaicBox)
 
-Every burst of `swaths` in the order `mergeBurstsVirtual` adds them, subswath by subswath and burst by
-burst, so that a later piece overwrites an earlier one where they overlap. The windows are the reference's
-and secondary's shared ones ([`valid_window`](@ref)); both mosaics use the same pieces, so the reference and
-the secondary carry the same burst in every pixel.
+Every burst of the reference's subswaths in the order `mergeBurstsVirtual` adds them, subswath by subswath
+and burst by burst, so that a later piece overwrites an earlier one where they overlap. The windows are the
+reference's and coregistered secondary's shared ones ([`coregistered_window`](@ref)) over the secondary's
+`bursts` ([`solve_secondary_bursts`](@ref)); both mosaics use the same pieces, so the reference and the
+secondary carry the same burst in every pixel.
 """
-function merge_pieces(rp::S1Product, sp::S1Product, swaths)
-    sws = collect(swaths)
-    box = MosaicBox(rp, sws)
+function merge_pieces(rp::S1Product, bursts)
+    box = MosaicBox(rp, rp.swaths)
     pieces = MergePiece[]
-    for sw in sws
-        ra, sa = SLCDatasets.annotation(rp, sw), SLCDatasets.annotation(sp, sw)
-        SLCDatasets.nbursts(sa) >= SLCDatasets.nbursts(ra) || throw(ArgumentError(
-            "the secondary's IW" * string(sw) * " has fewer bursts than the reference's"))
+    for sw in rp.swaths
+        ra = SLCDatasets.annotation(rp, sw)
         xoff = round(Int, (ra.starting_range - box.starting_range) / box.dr)
         for i in 1:SLCDatasets.nbursts(ra)
             yoff = round(Int, SLCDatasets.seconds_between(box.sensing_start, ra.burst_start[i]) / box.dt)
-            fl, ll, fs, ls = valid_window(ra, sa, i)
+            p = bursts[(sw, i)]
+            fl, ll, fs, ls = coregistered_window(valid_window(ra, i), p.svalid, p.dl, p.ds)
             (fl <= ll && fs <= ls) || continue
             push!(pieces, MergePiece(sw, i, fl:ll, fs:ls, (yoff + fl + 1):(yoff + ll + 1), (xoff + fs + 1):(xoff + ls + 1)))
         end
@@ -299,8 +332,7 @@ function read_burst!(dest, r::ReferenceBursts, q::MergePiece, lines::UnitRange{I
     return dest
 end
 
-function reference_mosaic(rp::S1Product, sp::S1Product, raster_of)
-    pieces, box = merge_pieces(rp, sp, rp.swaths)
+function reference_mosaic(rp::S1Product, pieces, box::MosaicBox, raster_of)
     rasters = Dict(sw => raster_of(sw) for sw in rp.swaths)
     lpb = Dict(sw => SLCDatasets.annotation(rp, sw).lines_per_burst for sw in rp.swaths)
     return BurstMosaic(ReferenceBursts(rasters, lpb), pieces, (box.nlines, box.nsamples))
@@ -437,18 +469,16 @@ struct SecondaryBurst
 end
 
 """
-    SecondaryBursts
+    solve_secondary_bursts(rp, sp, dem) -> Dict{Tuple{Int,Int},SecondaryBurst}
 
-The secondary's bursts, each resampled onto its reference burst on demand. Each burst's carrier and offset
-field are built once, at construction.
+Every secondary burst's [`SecondaryBurst`](@ref), keyed by subswath and burst, from the annotations, the
+orbits and `dem` alone: no raster is read.
 """
-struct SecondaryBursts{R}
-    sources::Dict{Int,R}
-    bursts::Dict{Tuple{Int,Int},SecondaryBurst}
-end
-
-function SecondaryBursts(rp::S1Product, sp::S1Product, dem::D, raster_of) where {D}
-    sources = Dict(sw => raster_of(sw) for sw in rp.swaths)
+function solve_secondary_bursts(rp::S1Product, sp::S1Product, dem::D) where {D}
+    for sw in rp.swaths
+        SLCDatasets.nbursts(SLCDatasets.annotation(sp, sw)) >= SLCDatasets.nbursts(SLCDatasets.annotation(rp, sw)) ||
+            throw(ArgumentError("the secondary's IW" * string(sw) * " has fewer bursts than the reference's"))
+    end
     jobs = [(sw, i) for sw in rp.swaths for i in 1:SLCDatasets.nbursts(SLCDatasets.annotation(rp, sw))]
     tasks = map(jobs) do (sw, i)
         Threads.@spawn begin
@@ -462,11 +492,20 @@ function SecondaryBursts(rp::S1Product, sp::S1Product, dem::D, raster_of) where 
             carrier = CarrierFit(TopsCarrier(ss, cs, slpb), slpb, sspb)
             dl, ds = offset_lattice(radar_coordinate(SLCDatasets.bursts(rp, sw)[i]), cs, dem,
                                     a.lines_per_burst, a.samples_per_burst)
-            SecondaryBurst(((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds, valid_window(sa, nothing, i), (slpb, sspb))
+            SecondaryBurst(((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds, valid_window(sa, i), (slpb, sspb))
         end
     end
-    bursts = Dict{Tuple{Int,Int},SecondaryBurst}(j => fetch(t)::SecondaryBurst for (j, t) in zip(jobs, tasks))
-    return SecondaryBursts(sources, bursts)
+    return Dict{Tuple{Int,Int},SecondaryBurst}(j => fetch(t)::SecondaryBurst for (j, t) in zip(jobs, tasks))
+end
+
+"""
+    SecondaryBursts
+
+The secondary's bursts, each resampled onto its reference burst on demand, from its subswath's raster.
+"""
+struct SecondaryBursts{R}
+    sources::Dict{Int,R}
+    bursts::Dict{Tuple{Int,Int},SecondaryBurst}
 end
 
 """
@@ -491,27 +530,9 @@ function deramped_burst!(buf::Matrix{ComplexF32}, raster, rows::UnitRange{Int}, 
     return out
 end
 
-# The burst's samples zeroed outside its valid rectangle, as `slc_to_vrt_file` exposes the burst:
-# `origin` is the burst-local zero-based `(line, sample)` of `A[1, 1]`, the bounds zero-based inclusive.
-function zero_outside_valid!(A::AbstractMatrix{ComplexF32}, valid::NTuple{4,Int}, origin::NTuple{2,Int})
-    fvl, lvl, fvs, lvs = valid
-    nr, nc = size(A)
-    oy, ox = origin
-    z = zero(ComplexF32)
-    r0, r1 = clamp(fvl - oy + 1, 1, nr + 1), clamp(lvl - oy + 1, 0, nr)
-    c0, c1 = clamp(fvs - ox + 1, 1, nc + 1), clamp(lvs - ox + 1, 0, nc)
-    r0 > 1 && fill!(view(A, 1:(r0 - 1), :), z)
-    r1 < nr && fill!(view(A, (r1 + 1):nr, :), z)
-    if r0 <= r1
-        c0 > 1 && fill!(view(A, r0:r1, 1:(c0 - 1)), z)
-        c1 < nc && fill!(view(A, r0:r1, (c1 + 1):nc), z)
-    end
-    return A
-end
-
 # Burst `q`'s resampled amplitude over its zero-based output `lines` x `samples`, into `dest`. The band read
-# is the support those outputs reach, clamped to the burst: a pixel whose support leaves the burst is
-# rejected by the resample and never read.
+# is the support those outputs reach, clamped to the burst. The pieces' windows keep every tap inside the
+# secondary's valid window ([`coregistered_window`](@ref)), so the samples outside it are never read.
 function read_burst!(dest::AbstractMatrix{Float32}, r::SecondaryBursts, q::MergePiece, lines::UnitRange{Int},
                      samples::UnitRange{Int})
     p = r.bursts[(q.swath, q.burst)]
@@ -524,13 +545,12 @@ function read_burst!(dest::AbstractMatrix{Float32}, r::SecondaryBursts, q::Merge
     srows = (first(p.source_rows) - 1 + first(brows)):(first(p.source_rows) - 1 + last(brows))
     scratch = Matrix{ComplexF32}(undef, length(brows), length(bcols))
     src = deramped_burst!(scratch, r.sources[q.swath], srows, bcols, p.carrier, origin)
-    zero_outside_valid!(src, p.svalid, origin)
     return resample!(dest, src, p.dl, p.ds, lines, samples; origin, extent = p.extent, doppler = p.extent)
 end
 
-function secondary_mosaic(rp::S1Product, sp::S1Product, dem::D, raster_of) where {D}
-    pieces, box = merge_pieces(rp, sp, rp.swaths)
-    return BurstMosaic(SecondaryBursts(rp, sp, dem, raster_of), pieces, (box.nlines, box.nsamples))
+function secondary_mosaic(rp::S1Product, bursts, pieces, box::MosaicBox, raster_of)
+    sources = Dict(sw => raster_of(sw) for sw in rp.swaths)
+    return BurstMosaic(SecondaryBursts(sources, bursts), pieces, (box.nlines, box.nsamples))
 end
 
 # A product's subswath measurement raster: a file of a `.SAFE`, a zip's member inflated, or extracted bursts.
@@ -548,7 +568,7 @@ assembled from extracted bursts read their rasters through different types, so e
 function s1_imagery(s::RadarSetup, dem::D; dir::String, cache_io::Symbol) where {D}
     rp, sp = s.early_product, s.late_product
     # Decided without reading a raster, so the reference's mosaic is filled while the secondary's rasters
-    # are still being fetched.
+    # are still being fetched; only the two products' annotations, orbits and the DEM come before it.
     assembled = !isempty(rp.bursts)
     assembled == !isempty(sp.bursts) || throw(ArgumentError(
         "the two Sentinel-1 products must be given alike: both as products, or both as extractor URLs"))
@@ -563,13 +583,17 @@ function _s1_imagery(s::RadarSetup, dem::D, rraster::F1, sraster::F2; dir::Strin
     lx, ly = permutedims(g.location_x), permutedims(g.location_y)
     sentinel = Int32(g.nodata.output)
     declined = _sentinel_declined(lx, ly, sentinel)
-    ref = reference_mosaic(s.early_product, s.late_product, rraster)
+    rp, sp = s.early_product, s.late_product
+    # The secondary's offsets set both mosaics' windows, so they are solved before either is read.
+    bursts = solve_secondary_bursts(rp, sp, dem)
+    pieces, box = merge_pieces(rp, bursts)
+    ref = reference_mosaic(rp, pieces, box, rraster)
     co = s.pair.coordinate
     (co.nlines, co.nsamples) == size(ref) || throw(DimensionMismatch(
         "the geogrid was built on a different mosaic than the imagery"))
     early = fill_tiles!(TileCache(ref; tile = 1024, dir, io = cache_io))
     _accumulate_zeros!(declined, early, lx, ly, sentinel, NODATA_SAMPLE_OFFSET)
-    sec = secondary_mosaic(s.early_product, s.late_product, dem, sraster)
+    sec = secondary_mosaic(rp, bursts, pieces, box, sraster)
     size(sec) == size(ref) || throw(DimensionMismatch("the reference and secondary mosaics differ in size"))
     late = fill_tiles!(TileCache(sec; tile = 1024, dir, io = cache_io))
     _accumulate_zeros!(declined, late, lx, ly, sentinel, NODATA_SAMPLE_OFFSET)
