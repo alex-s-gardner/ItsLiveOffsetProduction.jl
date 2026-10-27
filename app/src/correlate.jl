@@ -117,7 +117,10 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     p = AutoRIFT.params(g; threaded = AutoRIFT.True(), preprocess = pre,
                         chip_size_max = (X = cmax, Y = even_chip(cmax * scale)))
     factor = cmax ÷ p.chip_size_min.X
-    pts = AutoRIFT.pointset(g; pixel_size = Float64(ImagePairGeometry.xsize(s.pair.coordinate)))
+    # Lattices counted from the DispGrid origin, so every product's coarser levels sit at the same map
+    # positions. `reverse`: the point set is indexed `[row, column]`.
+    pts = AutoRIFT.pointset(g; pixel_size = Float64(ImagePairGeometry.xsize(s.pair.coordinate)),
+                            origin = reverse(ImagePairGeometry.lattice_origin(g)))
     orig = size(pts.x)
     chop = chopped_size(orig, factor)
     # The grown mask gates the outputs; the narrow one gates the search. Both are the driver's, and

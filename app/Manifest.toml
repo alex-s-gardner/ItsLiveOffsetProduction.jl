@@ -97,11 +97,11 @@ version = "1.11.0"
 
 [[deps.AutoRIFT]]
 deps = ["CommonSolve", "Dates", "FFTW", "FFTW_jll", "LinearAlgebra", "Mmap", "PrecompileTools", "Random", "Scratch"]
-git-tree-sha1 = "008d06bab045ba0f1b034f0b265292e619b03b2d"
+git-tree-sha1 = "9424bb2620987e5e924b0370fcdef1a33a3e21e4"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/AutoRIFT.jl"
 uuid = "52cb0ed0-aa80-430c-bd04-c52888a79add"
-version = "0.1.0"
+version = "0.2.1"
 
     [deps.AutoRIFT.extensions]
     AutoRIFTAkazeFeaturesExt = "AkazeFeatures"
@@ -496,11 +496,11 @@ version = "0.1.1"
 
 [[deps.ImagePairGeometry]]
 deps = ["Extents", "FastGeoProjections", "GeoFormatTypes", "GeoInterface", "StaticArrays"]
-git-tree-sha1 = "fc27e4f7c8723a2cfd43b89217d6a48794b8b1ed"
+git-tree-sha1 = "a8610d6e02af275aa0fd6f98eeaa3208b977b109"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"
 uuid = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
-version = "0.1.0"
+version = "0.1.1"
 
     [deps.ImagePairGeometry.extensions]
     ImagePairGeometryRastersExt = ["Rasters", "DimensionalData", "ArchGDAL", "DiskArrays", "NetworkOptions"]

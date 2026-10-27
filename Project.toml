@@ -25,7 +25,7 @@ ItsLiveOffsetProductionRastersExt = ["Rasters", "DimensionalData", "ArchGDAL"]
 # Bounds match AutoRIFT.jl's, since the two resolve together in every deployment.
 [compat]
 ArchGDAL = "0.10"
-AutoRIFT = "0.1"
+AutoRIFT = "0.1, 0.2"
 Dates = "1"
 DimensionalData = "0.29, 0.30"
 FastGeoProjections = "0.1, 0.2"

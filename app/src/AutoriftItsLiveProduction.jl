@@ -18,7 +18,7 @@ import GeoFormatTypes as GFT
 import ImagePairGeometry
 using ImagePairGeometry: CoregisteredPair, GeometryInputs, IdentityTransform, ImageFootprint, InMemoryInputs,
                          MapGrid, PairGeometry, ProjectedCoordinate, TransformPair, coregister, footprint_bounds,
-                         grid_window, nodata_from, pairgeometry_blocked, transform_pair
+                         nested_window, nodata_from, pairgeometry_blocked, transform_pair
 using ImagePairGeometry: GridWindow
 import ItsLiveOffsetProduction
 using ItsLiveOffsetProduction: AttrValue
