@@ -99,7 +99,8 @@ function _radar_setup(c::Job, early::SceneSource, late::SceneSource, re::R, rl::
                       pending::Vector{Task} = Task[], polarization::String = "") where {R}
     f = FGP.Transformation(g, FGP.GeographicCRS())
     tf = TransformPair(f, inv(f))
-    window = grid_window(grid, footprint_bounds(tf, pair.coordinate))
+    # Whole DispGrid blocks, as for an optical pair (`geogrid`).
+    window = nested_window(grid, footprint_bounds(tf, pair.coordinate))
     inputs = geometry_inputs(region, window)
     geom = pairgeometry_blocked(grid, pair, InMemoryInputs(inputs, window); transform = () -> tf, window,
                                 nodata = nodata_from(nd === nothing ? 0.0 : nd))

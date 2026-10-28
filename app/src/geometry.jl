@@ -73,11 +73,12 @@ function _setup(c::Job, early::SceneSource, late::SceneSource, efp::Footprint, l
     return Setup(c, early, late, efp, lfp, warp, pair, target, region, grid, window, inputs, g, eg, lg)
 end
 
-# The window the transform's footprint bounds give, the parameters over it, and the geogrid there — the
-# only place the transform's type is known. The blocked geogrid is bit-identical to the serial one at any
-# block size and task count; each output point depends only on its own inputs.
+# The window the transform's footprint bounds give, widened to whole DispGrid blocks so the correlator's
+# coarser lattices fall on the same map blocks in every product, the parameters over it, and the geogrid
+# there — the only place the transform's type is known. The blocked geogrid is bit-identical to the serial
+# one at any block size and task count; each output point depends only on its own inputs.
 function geogrid(grid::Grid, pair::Pair_, region::Region, nd::Float64, tf::TransformPair)
-    window = grid_window(grid, footprint_bounds(tf, pair.coordinate))
+    window = nested_window(grid, footprint_bounds(tf, pair.coordinate))
     inputs = geometry_inputs(region, window)
     g = pairgeometry_blocked(grid, pair, InMemoryInputs(inputs, window); transform = () -> tf, window,
                              nodata = nodata_from(nd))
