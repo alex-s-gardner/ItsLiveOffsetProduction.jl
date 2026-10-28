@@ -224,6 +224,34 @@ end
 const EGM2008_GRID = "/vsicurl/https://cdn.proj.org/us_nga_egm08_25.tif"
 
 """
+    geoid_sampler(d, (lon0, lon1), (lat0, lat1); margin_px) -> DemSampler{NearLon}
+
+The window of the global geographic grid `d` over the box `lon0`–`lon1`, `lat0`–`lat1` grown by
+`margin_px` cells, sampled with values at cell centres. A box across the antimeridian has `lon1` past
+180; its window is the grid's columns from `lon0` to the grid's east edge and then its columns from the
+west edge to `lon1`, a turn on, which assumes the grid spans the whole turn.
+"""
+function geoid_sampler(d::Dataset, (lon0, lon1)::NTuple{2,Float64}, (lat0, lat1)::NTuple{2,Float64}; margin_px::Int)
+    gt = geotransform(d)
+    w, h = rastersize(d)
+    r0 = clamp(floor(Int, (lat1 - gt[4]) / gt[6]) - margin_px, 0, h - 1)
+    r1 = clamp(ceil(Int, (lat0 - gt[4]) / gt[6]) + margin_px, 0, h - 1)
+    c0 = clamp(floor(Int, (lon0 - gt[1]) / gt[2]) - margin_px, 0, w - 1)
+    near = NearLon((lon0 + lon1) / 2)
+    origin = (gt[1] + c0 * gt[2], gt[4] + r0 * gt[6])
+    if lon1 <= 180
+        c1 = clamp(ceil(Int, (lon1 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
+        return DemSampler(read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1), near, origin, (gt[2], gt[6]), 0.5)
+    end
+    # The grid's columns repeat a turn on from the one 360° east of its first.
+    k = round(Int, 360 / gt[2])
+    c1 = clamp(ceil(Int, (lon1 - 360 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
+    east = read_window(d, Float64, c0, r0, k - c0, r1 - r0 + 1)
+    west = read_window(d, Float64, 0, r0, c1 + 1, r1 - r0 + 1)
+    return DemSampler(vcat(east, west), near, origin, (gt[2], gt[6]), 0.5)
+end
+
+"""
     parameter_dem(s::RadarSetup; margin_px = 8) -> EllipsoidalDem
 
 Terrain heights above the ellipsoid over the pair's footprint, which is what `rdr2geo` solves against: the
@@ -249,27 +277,7 @@ function parameter_dem(s::RadarSetup, to_grid::F; margin_px::Int) where {F}
     lats = vcat(fill(lat0, n), fill(lat1, n), collect(range(lat0, lat1; length = n)),
                 collect(range(lat0, lat1; length = n)))
     xs, ys = to_grid(wrap_lon.(lons), lats)
-    geoid = with_dataset(EGM2008_GRID) do d
-        gt = geotransform(d)
-        w, h = rastersize(d)
-        r0 = clamp(floor(Int, (lat1 - gt[4]) / gt[6]) - margin_px, 0, h - 1)
-        r1 = clamp(ceil(Int, (lat0 - gt[4]) / gt[6]) + margin_px, 0, h - 1)
-        c0 = clamp(floor(Int, (lon0 - gt[1]) / gt[2]) - margin_px, 0, w - 1)
-        near = NearLon((lon0 + lon1) / 2)
-        origin = (gt[1] + c0 * gt[2], gt[4] + r0 * gt[6])
-        if lon1 <= 180
-            c1 = clamp(ceil(Int, (lon1 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
-            return DemSampler(read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1), near, origin, (gt[2], gt[6]), 0.5)
-        end
-        # Across the antimeridian the window is the grid's columns from `lon0` to its east edge and then
-        # its columns from its west edge to `lon1`, a turn on: one window whose longitudes run past 180.
-        # The grid's columns repeat a turn on from the one 360° east of its first.
-        k = round(Int, 360 / gt[2])
-        c1 = clamp(ceil(Int, (lon1 - 360 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
-        east = read_window(d, Float64, c0, r0, k - c0, r1 - r0 + 1)
-        west = read_window(d, Float64, 0, r0, c1 + 1, r1 - r0 + 1)
-        return DemSampler(vcat(east, west), near, origin, (gt[2], gt[6]), 0.5)
-    end
+    geoid = with_dataset(d -> geoid_sampler(d, (lon0, lon1), (lat0, lat1); margin_px), EGM2008_GRID)
     dem = with_dataset(dem_path(s.region)) do d
         gt = geotransform(d)
         w, h = rastersize(d)
