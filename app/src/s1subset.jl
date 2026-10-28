@@ -7,8 +7,14 @@
 # set of bursts, such as an OPERA frame's, also touches the edges of the bursts on either side. A burst is
 # the same ground on every pass of its track, starting the same time after the ascending node to well under
 # a burst's length (`azimuthAnxTime`), which is what its burst ID counts, so the two scenes' bursts are
-# matched by subswath and that time. Footprints are compared in longitude and latitude, so a polygon or
-# burst crossing the antimeridian is not handled. Two slices of one datatake overlap and
+# matched by subswath and that time.
+#
+# Footprints are compared in longitude and latitude, in one frame of continuous longitudes centred on the
+# polygon. The polygon is read as written, its edges straight in longitude and latitude, so one crossing
+# the antimeridian is given split at ±180° into a `MULTIPOLYGON`, as OPERA stores such frames; each piece
+# is moved by whole turns into the frame, which rejoins them. A burst footprint is a fine grid of points,
+# so a step of more than half a turn between neighbours is a crossing: its longitudes are made continuous,
+# then moved into the frame. Two slices of one datatake overlap and
 # can list the same burst; it is taken once, from the zip named first.
 
 """
@@ -37,7 +43,57 @@ struct SubsetBurst
     swath::Int
     burst::Int
     anx_time::Float64
-    ring::Vector{NTuple{2,Float64}}
+    ring::Ring
+end
+
+# `lon` moved by whole turns to within half a turn of `center`.
+_near(lon::Float64, center::Float64) = lon - 360 * round((lon - center) / 360)
+
+"""
+    unwrap(ring, center) -> Ring
+
+`ring` with its longitudes made continuous — each vertex within half a turn of the one before — and then
+shifted by whole turns so that its first vertex is within half a turn of `center`.
+"""
+function unwrap(ring::Ring, center::Float64)
+    out = similar(ring)
+    prev = _near(first(ring)[1], center)
+    for (i, (x, y)) in enumerate(ring)
+        prev = _near(x, prev)
+        out[i] = (prev, y)
+    end
+    return out
+end
+
+"""
+    subset_area(wkt) -> (Vector{Vector{Ring}}, Float64)
+
+The polygons `wkt` describes, each moved by whole turns of longitude into one frame, and that frame's
+centre: the circular mean of the polygons' longitude midpoints. The pieces of a polygon split at the
+antimeridian then share edges and join.
+
+Refused: a polygon wider than half a turn of longitude, which reads differently according to which way
+round it is taken, and a set of polygons that together span more than half a turn, which no frame of
+continuous longitudes holds.
+"""
+function subset_area(wkt::String)
+    polys = wkt_polygons(wkt)
+    sx = sy = 0.0
+    for p in polys
+        lo, hi = extrema(first, first(p))
+        hi - lo <= 180 || throw(ArgumentError(
+            "\"" * wkt * "\" has a polygon " * string(round(hi - lo; digits = 1)) * "° wide in longitude; split " *
+            "one crossing the antimeridian at ±180° into a MULTIPOLYGON"))
+        sx += cosd((lo + hi) / 2)
+        sy += sind((lo + hi) / 2)
+    end
+    center = atand(sy, sx)
+    out = [Ring[[(x - 360 * round(((lo + hi) / 2 - center) / 360), y) for (x, y) in r] for r in p]
+           for p in polys for (lo, hi) in (extrema(first, first(p)),)]
+    lo, hi = extrema(x for p in out for (x, _) in first(p))
+    hi - lo <= 180 || throw(ArgumentError(
+        "\"" * wkt * "\" spans " * string(round(hi - lo; digits = 1)) * "° of longitude; a subset spans at most 180°"))
+    return out, center
 end
 
 # Every burst of every zip of a scene in `polarization`, a burst listed by two overlapping zips once, from
@@ -62,14 +118,16 @@ vertices) correlates: those `S1_SUBSET_COVER` of whose footprint the polygon cov
 scene, held by both, matched burst for burst and in the same order in the two vectors.
 """
 function subset_bursts(reference::String, secondary::String, wkt::String, polarization::String)
+    polys, center = subset_area(wkt)
     rs, ss = scene_bursts(reference, polarization), scene_bursts(secondary, polarization)
     pairs = Tuple{SubsetBurst,SubsetBurst}[]
-    with_wkt_geometry(wkt) do area
+    cover(area, b) = ring_overlap(area, unwrap(b.ring, center))
+    with_polygons(polys) do area
         for r in rs
             k = findfirst(s -> s.swath == r.swath && abs(s.anx_time - r.anx_time) < S1_ANX_MATCH, ss)
             k === nothing && continue
             s = ss[k]
-            max(ring_overlap(area, r.ring), ring_overlap(area, s.ring)) >= S1_SUBSET_COVER && push!(pairs, (r, s))
+            max(cover(area, r), cover(area, s)) >= S1_SUBSET_COVER && push!(pairs, (r, s))
         end
     end
     isempty(pairs) && throw(ArgumentError(

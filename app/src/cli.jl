@@ -28,9 +28,10 @@ options:
   --dem PATH           S1, NL1: a geographic (EPSG:4326) DEM of heights above the WGS84 ellipsoid for the
                        resample's terrain solve, in place of the ITS_LIVE parameter region's DEM plus
                        the EGM2008 geoid
-  --subset WKT         S1BURST from SLC zips: a polygon of longitude-latitude vertices; the pair is the
-                       bursts both scenes hold at least half of whose footprint it covers, read out of
-                       the zips
+  --subset WKT         S1BURST from SLC zips: a POLYGON or MULTIPOLYGON of longitude-latitude vertices,
+                       one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
+                       the bursts both scenes hold at least half of whose footprint it covers, read out
+                       of the zips
   --quiet              no per-stage timings on stderr
 
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a

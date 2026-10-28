@@ -80,6 +80,8 @@ $X S1 $A/S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE.zip
 
 **Sentinel-1 bursts from SLC zips**: each pass's zips, comma-separated, and a polygon (longitude, latitude)
 whose bursts are correlated: each burst both passes hold at least half of whose footprint the polygon covers.
+The polygon is a WKT `POLYGON` or `MULTIPOLYGON`; one crossing the antimeridian is given split at ±180°,
+as OPERA stores its frames, and its pieces are rejoined.
 Here OPERA frame 6527, 27 bursts across two slices of each pass:
 
 ```bash

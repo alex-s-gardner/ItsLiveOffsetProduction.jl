@@ -354,37 +354,88 @@ function field_int(feat, name::String)
 end
 
 """
-    with_wkt_geometry(f, wkt)
+    Ring
 
-`f(geometry)` for the OGR geometry `wkt` describes, destroyed when `f` returns. A WKT that does not parse,
-or describes no area, is refused.
+A closed ring of `(x, y)` vertices, the last equal to the first.
 """
-function with_wkt_geometry(f::F, wkt::String) where {F}
+const Ring = Vector{NTuple{2,Float64}}
+
+"""
+    wkt_polygons(wkt) -> Vector{Vector{Ring}}
+
+The polygons a WKT `POLYGON` or `MULTIPOLYGON` describes, each its exterior ring then its holes. Anything
+else, a WKT that does not parse, or one that encloses no area, is refused.
+"""
+function wkt_polygons(wkt::String)
     g = Ref{GDAL.OGRGeometryH}(C_NULL)
     GDAL.ogr_g_createfromwkt([wkt], C_NULL, g) == GDAL.OGRERR_NONE && g[] != C_NULL ||
         throw(ArgumentError("\"" * wkt * "\" is not a WKT geometry"))
     try
+        t = GDAL.ogr_gt_flatten(GDAL.ogr_g_getgeometrytype(g[]))
+        (t == GDAL.wkbPolygon || t == GDAL.wkbMultiPolygon) ||
+            throw(ArgumentError("\"" * wkt * "\" is not a POLYGON or MULTIPOLYGON"))
         GDAL.ogr_g_area(g[]) > 0 || throw(ArgumentError("\"" * wkt * "\" encloses no area"))
-        return f(g[])
+        t == GDAL.wkbPolygon && return [_polygon_rings(g[])]
+        return [_polygon_rings(GDAL.ogr_g_getgeometryref(g[], k)) for k in 0:(GDAL.ogr_g_getgeometrycount(g[]) - 1)]
     finally
         GDAL.ogr_g_destroygeometry(g[])
+    end
+end
+
+function _polygon_rings(poly::GDAL.OGRGeometryH)
+    rings = Ring[]
+    for k in 0:(GDAL.ogr_g_getgeometrycount(poly) - 1)
+        r = GDAL.ogr_g_getgeometryref(poly, k)
+        push!(rings, NTuple{2,Float64}[(GDAL.ogr_g_getx(r, i), GDAL.ogr_g_gety(r, i))
+                                       for i in 0:(GDAL.ogr_g_getpointcount(r) - 1)])
+    end
+    return rings
+end
+
+# An OGR polygon of `rings`, exterior first; the caller destroys it.
+function _ogr_polygon(rings::Vector{Ring})
+    poly = GDAL.ogr_g_creategeometry(GDAL.wkbPolygon)
+    for ring in rings
+        lr = GDAL.ogr_g_creategeometry(GDAL.wkbLinearRing)
+        for (x, y) in ring
+            GDAL.ogr_g_addpoint_2d(lr, x, y)
+        end
+        GDAL.ogr_g_addgeometrydirectly(poly, lr)
+    end
+    return poly
+end
+
+"""
+    with_polygons(f, polygons::Vector{Vector{Ring}})
+
+`f(geometry)` for the union of `polygons`, destroyed when `f` returns. The union makes one valid geometry
+of polygons that share edges, as the pieces of a polygon split at the antimeridian do once rejoined.
+"""
+function with_polygons(f::F, polygons::Vector{Vector{Ring}}) where {F}
+    multi = GDAL.ogr_g_creategeometry(GDAL.wkbMultiPolygon)
+    u = GDAL.OGRGeometryH(C_NULL)
+    try
+        for rings in polygons
+            GDAL.ogr_g_addgeometrydirectly(multi, _ogr_polygon(rings))
+        end
+        u = GDAL.ogr_g_unaryunion(multi)
+        u == C_NULL && throw(_gdal_error("the subset polygons do not form one geometry"))
+        return f(u)
+    finally
+        u == C_NULL || GDAL.ogr_g_destroygeometry(u)
+        GDAL.ogr_g_destroygeometry(multi)
     end
 end
 
 """
     ring_overlap(geometry, ring) -> Float64
 
-The fraction of the area of the polygon the closed `ring` of `(x, y)` vertices encloses that lies inside
-`geometry`, in the units of the vertices.
+The fraction of the area of the polygon `ring` encloses that lies inside `geometry`, in the units of the
+vertices.
 """
-function ring_overlap(geometry::GDAL.OGRGeometryH, ring::Vector{NTuple{2,Float64}})
-    poly = GDAL.ogr_g_creategeometry(GDAL.wkbPolygon)
+function ring_overlap(geometry::GDAL.OGRGeometryH, ring::Ring)
+    poly = _ogr_polygon([ring])
     try
-        lr = GDAL.ogr_g_creategeometry(GDAL.wkbLinearRing)
-        for (x, y) in ring
-            GDAL.ogr_g_addpoint_2d(lr, x, y)
-        end
-        GDAL.ogr_g_addgeometrydirectly(poly, lr)
         whole = GDAL.ogr_g_area(poly)
         whole > 0 || return 0.0
         part = GDAL.ogr_g_intersection(geometry, poly)

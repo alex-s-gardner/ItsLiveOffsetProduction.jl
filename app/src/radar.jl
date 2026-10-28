@@ -84,8 +84,8 @@ function radar_setup(c::Job)
     dt = SLCDatasets.repeat_interval(re, rl)
     dt > 0 || throw(ArgumentError("the secondary acquisition does not start after the reference"))
     pair = CoregisteredPair(radar_coordinate(re); dt, secondary = radar_coordinate(rl))
-    b = footprint_bounds(IdentityTransform(), pair.coordinate)
-    region = parameter_region((b.X[1] + b.X[2]) / 2, (b.Y[1] + b.Y[2]) / 2)
+    x, y = geodetic_bounds(pair.coordinate)
+    region = parameter_region(wrap_lon((x[1] + x[2]) / 2), (y[1] + y[2]) / 2)
     grid = parameter_grid(region)
     nd = with_dataset(band_nodata, region.paths[4])
     g = FGP.native_crs(region.epsg)
@@ -109,10 +109,41 @@ end
 
 dy_sign(::RadarSetup) = -DY_SIGN
 
+"""
+    geodetic_bounds(coordinate) -> ((lon_lo, lon_hi), (lat_lo, lat_hi))
+
+The geodetic box around a radar footprint, in degrees. `rdr2geo` gives longitudes in [-180, 180], so the
+box `footprint_bounds` spans of a footprint across the antimeridian runs the long way round; footprints
+are under half a turn wide, so a span over half a turn is that case, and the box is then the short way
+round, its east edge past 180.
+"""
+function geodetic_bounds(coordinate)
+    b = footprint_bounds(IdentityTransform(), coordinate)
+    lo, hi = b.X
+    hi - lo > 180 || return ((lo, hi), b.Y)
+    # Across the antimeridian: the west edge is the least longitude east of it, the east edge the greatest
+    # west of it, a turn on. The two are found from the footprint's own samples, which straddle ±180.
+    w, e = 180.0, -180.0
+    for lon in footprint_longitudes(coordinate)
+        lon >= 0 ? (w = min(w, lon)) : (e = max(e, lon))
+    end
+    return ((w, e + 360), b.Y)
+end
+
+# The longitudes `footprint_bounds` takes its extremes over.
+function footprint_longitudes(coordinate)
+    lons = Float64[]
+    footprint_bounds((x, y, z) -> (push!(lons, x); (x, y, z)), coordinate)
+    return lons
+end
+
+# A longitude moved by a whole turn into [-180, 180).
+wrap_lon(lon::Float64) = lon - 360 * floor((lon + 180) / 360)
+
 # The footprint's midpoint in geodetic degrees, which the region lookup and the product's centroid take.
 function radar_centroid(s::RadarSetup)
-    b = footprint_bounds(IdentityTransform(), s.pair.coordinate)
-    return ((b.X[1] + b.X[2]) / 2, (b.Y[1] + b.Y[2]) / 2)
+    x, y = geodetic_bounds(s.pair.coordinate)
+    return (wrap_lon((x[1] + x[2]) / 2), (y[1] + y[2]) / 2)
 end
 
 # ---------------------------------------------------------------------------
@@ -151,6 +182,13 @@ end
 struct LonLat end
 (::LonLat)(lon::Float64, lat::Float64) = (lon, lat)
 
+# Longitude moved by whole turns to within half a turn of `center`, for a geodetic window centred there,
+# which may run past 180.
+struct NearLon
+    center::Float64
+end
+(n::NearLon)(lon::Float64, lat::Float64) = (lon - 360 * round((lon - n.center) / 360), lat)
+
 """
     geographic_dem(path) -> DemSampler
 
@@ -177,7 +215,7 @@ Heights above the WGS84 ellipsoid from an orthometric `dem` and the `geoid` undu
 """
 struct EllipsoidalDem{F}
     dem::DemSampler{F}
-    geoid::DemSampler{LonLat}
+    geoid::DemSampler{NearLon}
 end
 
 (d::EllipsoidalDem)(lon_d::Float64, lat_d::Float64) = d.dem(lon_d, lat_d) + d.geoid(lon_d, lat_d)
@@ -204,22 +242,33 @@ function parameter_dem(s::RadarSetup; margin_px::Int = 8)
 end
 
 function parameter_dem(s::RadarSetup, to_grid::F; margin_px::Int) where {F}
-    b = footprint_bounds(IdentityTransform(), s.pair.coordinate)
+    (lon0, lon1), (lat0, lat1) = geodetic_bounds(s.pair.coordinate)
     n = 33
-    lons = vcat(collect(range(b.X[1], b.X[2]; length = n)), collect(range(b.X[1], b.X[2]; length = n)),
-                fill(b.X[1], n), fill(b.X[2], n))
-    lats = vcat(fill(b.Y[1], n), fill(b.Y[2], n), collect(range(b.Y[1], b.Y[2]; length = n)),
-                collect(range(b.Y[1], b.Y[2]; length = n)))
-    xs, ys = to_grid(lons, lats)
+    lons = vcat(collect(range(lon0, lon1; length = n)), collect(range(lon0, lon1; length = n)),
+                fill(lon0, n), fill(lon1, n))
+    lats = vcat(fill(lat0, n), fill(lat1, n), collect(range(lat0, lat1; length = n)),
+                collect(range(lat0, lat1; length = n)))
+    xs, ys = to_grid(wrap_lon.(lons), lats)
     geoid = with_dataset(EGM2008_GRID) do d
         gt = geotransform(d)
         w, h = rastersize(d)
-        c0 = clamp(floor(Int, (b.X[1] - gt[1]) / gt[2]) - margin_px, 0, w - 1)
-        c1 = clamp(ceil(Int, (b.X[2] - gt[1]) / gt[2]) + margin_px, 0, w - 1)
-        r0 = clamp(floor(Int, (b.Y[2] - gt[4]) / gt[6]) - margin_px, 0, h - 1)
-        r1 = clamp(ceil(Int, (b.Y[1] - gt[4]) / gt[6]) + margin_px, 0, h - 1)
-        z = read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1)
-        DemSampler(z, LonLat(), (gt[1] + c0 * gt[2], gt[4] + r0 * gt[6]), (gt[2], gt[6]), 0.5)
+        r0 = clamp(floor(Int, (lat1 - gt[4]) / gt[6]) - margin_px, 0, h - 1)
+        r1 = clamp(ceil(Int, (lat0 - gt[4]) / gt[6]) + margin_px, 0, h - 1)
+        c0 = clamp(floor(Int, (lon0 - gt[1]) / gt[2]) - margin_px, 0, w - 1)
+        near = NearLon((lon0 + lon1) / 2)
+        origin = (gt[1] + c0 * gt[2], gt[4] + r0 * gt[6])
+        if lon1 <= 180
+            c1 = clamp(ceil(Int, (lon1 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
+            return DemSampler(read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1), near, origin, (gt[2], gt[6]), 0.5)
+        end
+        # Across the antimeridian the window is the grid's columns from `lon0` to its east edge and then
+        # its columns from its west edge to `lon1`, a turn on: one window whose longitudes run past 180.
+        # The grid's columns repeat a turn on from the one 360° east of its first.
+        k = round(Int, 360 / gt[2])
+        c1 = clamp(ceil(Int, (lon1 - 360 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
+        east = read_window(d, Float64, c0, r0, k - c0, r1 - r0 + 1)
+        west = read_window(d, Float64, 0, r0, c1 + 1, r1 - r0 + 1)
+        return DemSampler(vcat(east, west), near, origin, (gt[2], gt[6]), 0.5)
     end
     dem = with_dataset(dem_path(s.region)) do d
         gt = geotransform(d)
