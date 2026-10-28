@@ -84,8 +84,7 @@ function radar_setup(c::Job)
     dt = SLCDatasets.repeat_interval(re, rl)
     dt > 0 || throw(ArgumentError("the secondary acquisition does not start after the reference"))
     pair = CoregisteredPair(radar_coordinate(re); dt, secondary = radar_coordinate(rl))
-    x, y = geodetic_bounds(pair.coordinate)
-    region = parameter_region(wrap_lon((x[1] + x[2]) / 2), (y[1] + y[2]) / 2)
+    region = parameter_region(geodetic_centroid(pair.coordinate)...)
     grid = parameter_grid(region)
     nd = with_dataset(band_nodata, region.paths[4])
     g = FGP.native_crs(region.epsg)
@@ -118,33 +117,33 @@ are under half a turn wide, so a span over half a turn is that case, and the box
 round, its east edge past 180.
 """
 function geodetic_bounds(coordinate)
-    b = footprint_bounds(IdentityTransform(), coordinate)
+    lons = Float64[]
+    b = footprint_bounds((x, y, z) -> (push!(lons, x); (x, y, z)), coordinate)
     lo, hi = b.X
     hi - lo > 180 || return ((lo, hi), b.Y)
     # Across the antimeridian: the west edge is the least longitude east of it, the east edge the greatest
-    # west of it, a turn on. The two are found from the footprint's own samples, which straddle ±180.
+    # west of it, a turn on.
     w, e = 180.0, -180.0
-    for lon in footprint_longitudes(coordinate)
+    for lon in lons
         lon >= 0 ? (w = min(w, lon)) : (e = max(e, lon))
     end
     return ((w, e + 360), b.Y)
 end
 
-# The longitudes `footprint_bounds` takes its extremes over.
-function footprint_longitudes(coordinate)
-    lons = Float64[]
-    footprint_bounds((x, y, z) -> (push!(lons, x); (x, y, z)), coordinate)
-    return lons
-end
+# A longitude moved by whole turns to within half a turn of `center`.
+near_lon(lon::Float64, center::Float64) = lon - 360 * round((lon - center) / 360)
 
 # A longitude moved by a whole turn into [-180, 180).
 wrap_lon(lon::Float64) = lon - 360 * floor((lon + 180) / 360)
 
-# The footprint's midpoint in geodetic degrees, which the region lookup and the product's centroid take.
-function radar_centroid(s::RadarSetup)
-    x, y = geodetic_bounds(s.pair.coordinate)
+# The midpoint of a radar footprint's geodetic box, in [-180, 180) degrees of longitude.
+function geodetic_centroid(coordinate)
+    x, y = geodetic_bounds(coordinate)
     return (wrap_lon((x[1] + x[2]) / 2), (y[1] + y[2]) / 2)
 end
+
+# The footprint's midpoint in geodetic degrees, which the region lookup and the product's centroid take.
+radar_centroid(s::RadarSetup) = geodetic_centroid(s.pair.coordinate)
 
 # ---------------------------------------------------------------------------
 # Terrain heights
@@ -187,7 +186,7 @@ struct LonLat end
 struct NearLon
     center::Float64
 end
-(n::NearLon)(lon::Float64, lat::Float64) = (lon - 360 * round((lon - n.center) / 360), lat)
+(n::NearLon)(lon::Float64, lat::Float64) = (near_lon(lon, n.center), lat)
 
 """
     geographic_dem(path) -> DemSampler
@@ -239,16 +238,16 @@ function geoid_sampler(d::Dataset, (lon0, lon1)::NTuple{2,Float64}, (lat0, lat1)
     c0 = clamp(floor(Int, (lon0 - gt[1]) / gt[2]) - margin_px, 0, w - 1)
     near = NearLon((lon0 + lon1) / 2)
     origin = (gt[1] + c0 * gt[2], gt[4] + r0 * gt[6])
-    if lon1 <= 180
+    z = if lon1 <= 180
         c1 = clamp(ceil(Int, (lon1 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
-        return DemSampler(read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1), near, origin, (gt[2], gt[6]), 0.5)
+        read_window(d, Float64, c0, r0, c1 - c0 + 1, r1 - r0 + 1)
+    else
+        # The grid's columns repeat a turn on from the one 360° east of its first.
+        k = round(Int, 360 / gt[2])
+        c1 = clamp(ceil(Int, (lon1 - 360 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
+        vcat(read_window(d, Float64, c0, r0, k - c0, r1 - r0 + 1), read_window(d, Float64, 0, r0, c1 + 1, r1 - r0 + 1))
     end
-    # The grid's columns repeat a turn on from the one 360° east of its first.
-    k = round(Int, 360 / gt[2])
-    c1 = clamp(ceil(Int, (lon1 - 360 - gt[1]) / gt[2]) + margin_px, 0, w - 1)
-    east = read_window(d, Float64, c0, r0, k - c0, r1 - r0 + 1)
-    west = read_window(d, Float64, 0, r0, c1 + 1, r1 - r0 + 1)
-    return DemSampler(vcat(east, west), near, origin, (gt[2], gt[6]), 0.5)
+    return DemSampler(z, near, origin, (gt[2], gt[6]), 0.5)
 end
 
 """

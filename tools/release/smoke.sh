@@ -29,12 +29,7 @@ while IFS=$'\t' read -r group sensor ref sec subset; do
   [ ${#groups[@]} -eq 0 ] || [[ " ${groups[*]} " == *" $group "* ]] || continue
   work=$(mktemp -d "$scratch_root/smoke.XXXXXX"); log=$work/log; : > "$log"
   t0=$(date +%s); result=FAIL; detail=
-  # `set -u` treats an empty array as unset before bash 4.4, so the option is spelled out in each branch.
-  if [ -n "${subset:-}" ]; then
-    "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" --subset "$subset" > "$log" 2>&1 &
-  else
-    "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" > "$log" 2>&1 &
-  fi
+  "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" ${subset:+--subset "$subset"} > "$log" 2>&1 &
   pid=$!
   while kill -0 $pid 2>/dev/null; do
     if grep -q -E "$pat" "$log"; then result=PASS; break; fi

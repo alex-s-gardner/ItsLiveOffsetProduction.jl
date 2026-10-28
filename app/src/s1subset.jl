@@ -46,9 +46,6 @@ struct SubsetBurst
     ring::Ring
 end
 
-# `lon` moved by whole turns to within half a turn of `center`.
-_near(lon::Float64, center::Float64) = lon - 360 * round((lon - center) / 360)
-
 """
     unwrap(ring, center) -> Ring
 
@@ -57,9 +54,9 @@ shifted by whole turns so that its first vertex is within half a turn of `center
 """
 function unwrap(ring::Ring, center::Float64)
     out = similar(ring)
-    prev = _near(first(ring)[1], center)
+    prev = near_lon(first(ring)[1], center)
     for (i, (x, y)) in enumerate(ring)
-        prev = _near(x, prev)
+        prev = near_lon(x, prev)
         out[i] = (prev, y)
     end
     return out
@@ -78,18 +75,17 @@ continuous longitudes holds.
 """
 function subset_area(wkt::String)
     polys = wkt_polygons(wkt)
-    sx = sy = 0.0
-    for p in polys
-        lo, hi = extrema(first, first(p))
+    spans = [extrema(first, first(p)) for p in polys]
+    for (lo, hi) in spans
         hi - lo <= 180 || throw(ArgumentError(
             "\"" * wkt * "\" has a polygon " * string(round(hi - lo; digits = 1)) * "° wide in longitude; split " *
             "one crossing the antimeridian at ±180° into a MULTIPOLYGON"))
-        sx += cosd((lo + hi) / 2)
-        sy += sind((lo + hi) / 2)
     end
-    center = atand(sy, sx)
-    out = [Ring[[(x - 360 * round(((lo + hi) / 2 - center) / 360), y) for (x, y) in r] for r in p]
-           for p in polys for (lo, hi) in (extrema(first, first(p)),)]
+    mids = [(lo + hi) / 2 for (lo, hi) in spans]
+    center = atand(sum(sind, mids), sum(cosd, mids))
+    # Each polygon moved by the whole turns that bring its midpoint next to the centre.
+    turns = [360 * round((m - center) / 360) for m in mids]
+    out = [Ring[[(x - t, y) for (x, y) in r] for r in p] for (p, t) in zip(polys, turns)]
     lo, hi = extrema(x for p in out for (x, _) in first(p))
     hi - lo <= 180 || throw(ArgumentError(
         "\"" * wkt * "\" spans " * string(round(hi - lo; digits = 1)) * "° of longitude; a subset spans at most 180°"))
@@ -120,20 +116,21 @@ scene, held by both, matched burst for burst and in the same order in the two ve
 function subset_bursts(reference::String, secondary::String, wkt::String, polarization::String)
     polys, center = subset_area(wkt)
     rs, ss = scene_bursts(reference, polarization), scene_bursts(secondary, polarization)
-    pairs = Tuple{SubsetBurst,SubsetBurst}[]
-    cover(area, b) = ring_overlap(area, unwrap(b.ring, center))
+    rb, sb = SubsetBurst[], SubsetBurst[]
+    covered(area, b) = ring_overlap(area, unwrap(b.ring, center)) >= S1_SUBSET_COVER
     with_polygons(polys) do area
         for r in rs
             k = findfirst(s -> s.swath == r.swath && abs(s.anx_time - r.anx_time) < S1_ANX_MATCH, ss)
             k === nothing && continue
-            s = ss[k]
-            max(cover(area, r), cover(area, s)) >= S1_SUBSET_COVER && push!(pairs, (r, s))
+            (covered(area, r) || covered(area, ss[k])) || continue
+            push!(rb, r)
+            push!(sb, ss[k])
         end
     end
-    isempty(pairs) && throw(ArgumentError(
+    isempty(rb) && throw(ArgumentError(
         "no burst both scenes hold lies inside the subset polygon; check that the polygon is in longitude " *
         "and latitude and that the zips are of the same track"))
-    return SubsetBurst[p[1] for p in pairs], SubsetBurst[p[2] for p in pairs]
+    return rb, sb
 end
 
 """
