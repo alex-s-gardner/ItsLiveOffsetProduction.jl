@@ -9,8 +9,9 @@ usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> 
                (L4, L5) band, with <scene>_MTL.json and <scene>_ANG.txt beside it, or a landsatlook
                STAC item. Sentinel-2: the B08.jp2 inside a .SAFE, or an Earth Search STAC item.
                Sentinel-1 (S1): the IW SLC product's .SAFE directory or its .zip, local or a URL;
-               (S1BURST) the bursts' extractor URLs, comma-separated
-               (https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff), or the
+               (S1BURST) the SLC zips the bursts are in, comma-separated, with --subset; the bursts'
+               extractor URLs, comma-separated
+               (https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff); or the
                SAFE burst2safe assembles from them.
                NISAR: the RSLC (NL1) or GSLC (NL2) granule's .h5.
   output.nc    where the ITS_LIVE product is written
@@ -27,6 +28,9 @@ options:
   --dem PATH           S1, NL1: a geographic (EPSG:4326) DEM of heights above the WGS84 ellipsoid for the
                        resample's terrain solve, in place of the ITS_LIVE parameter region's DEM plus
                        the EGM2008 geoid
+  --subset WKT         S1BURST from SLC zips: a polygon of longitude-latitude vertices; the pair is the
+                       bursts both scenes hold at least half of whose footprint it covers, read out of
+                       the zips
   --quiet              no per-stage timings on stderr
 
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
@@ -37,14 +41,15 @@ Landsat is read from s3://usgs-landsat, which is requester-pays: the AWS credent
 AWS_PROFILE, container or instance role) must name an account that can pay. A NISAR granule over https://
 from an Earthdata host is read with the token in EARTHDATA_TOKEN, or one obtained with the
 urs.earthdata.nasa.gov credentials in ~/.netrc. Sentinel-1 bursts are fetched from ASF's burst extractor
-with those ~/.netrc credentials, waiting while the extractor generates them, and downloaded into the
-run's scratch directory.
+with those ~/.netrc credentials, waiting while the extractor generates them, or inflated out of their SLC
+zips, which are read with the same credentials; either way into the run's scratch directory.
 """
 
 """
     Arguments
 
-A parsed command line: the job's inputs, the output path, the run options and the heap hint.
+A parsed command line: the job's inputs, the output path, the run options, the heap hint and the burst
+subset polygon (empty for none).
 """
 struct Arguments
     sensor::String
@@ -53,6 +58,7 @@ struct Arguments
     output::String
     options::RunOptions
     heap_hint_gib::Float64
+    subset::String
 end
 
 """
@@ -69,10 +75,11 @@ function parse_args(args::Vector{String})
     verbose = true
     dem = ""
     orbit_dir = ""
+    subset = ""
     i = 1
     while i <= length(args)
         a = args[i]
-        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir")
+        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
             if a == "--scratch"
@@ -81,6 +88,8 @@ function parse_args(args::Vector{String})
                 dem = v
             elseif a == "--orbit-dir"
                 orbit_dir = v
+            elseif a == "--subset"
+                subset = v
             elseif a == "--cache-io"
                 v in ("pread", "mmap") || throw(ArgumentError("--cache-io is pread or mmap, got " * v))
                 cache_io = v == "pread" ? :pread : :mmap
@@ -108,7 +117,7 @@ function parse_args(args::Vector{String})
         "expected <sensor> <reference> <secondary> <output.nc>, got " * string(length(positional)) *
         " positional arguments"))
     return Arguments(uppercase(positional[1]), positional[2], positional[3], positional[4],
-                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint)
+                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint, subset)
 end
 
 # An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
@@ -157,7 +166,7 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         release_freed_memory!()
         set_heap_hint!(a.heap_hint_gib)
         AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
-        job = Job(a.sensor, a.reference, a.secondary)
+        job = Job(a.sensor, a.reference, a.secondary; subset = a.subset)
         path = run_job(job, a.output; options = a.options)
         say("wrote " * path)
         return Cint(0)

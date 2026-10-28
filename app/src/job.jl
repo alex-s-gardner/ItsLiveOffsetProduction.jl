@@ -72,8 +72,18 @@ struct Job
     product::String
 end
 
-function Job(sensor::String, reference::String, secondary::String)
+function Job(sensor::String, reference::String, secondary::String; subset::String = "")
     spec = sensor_spec(sensor)
+    if !isempty(subset)
+        spec.platform == "S1-BURST" || throw(ArgumentError(
+            "--subset selects the bursts of a Sentinel-1 burst pair (S1BURST); sensor " * sensor * " takes none"))
+        (is_zip_list(reference) && is_zip_list(secondary)) || throw(ArgumentError(
+            "--subset selects bursts out of SLC zips: give each scene as its zips, comma-separated"))
+        reference, secondary = subset_inputs(reference, secondary, subset)
+    elseif occursin(',', reference) && is_zip_list(reference)
+        throw(ArgumentError("the reference names several SLC zips; a burst pair from zips needs --subset, " *
+                            "the polygon its bursts are selected by"))
+    end
     ref = scene_source(reference, spec.platform)
     sec = scene_source(secondary, spec.platform)
     occursin(spec.reference, ref.name) || throw(ArgumentError(
@@ -92,13 +102,17 @@ Landsat 7, 8 and 9, `_B2.TIF` (green) for 4 and 5 — with its `_MTL.json` and `
 landsatlook STAC item, whose assets name all three. A Sentinel-2 input is the `B08.jp2` band inside a
 `.SAFE`, or an Earth Search STAC item, which is resolved through its `s2:product_uri` to the band on the
 public Google Cloud mirror. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
-directory or its `.zip`. A burst pair's input is the bursts' extractor URLs, comma-separated, whose scene
-is the product `burst2safe` would assemble from them, or that product's `.SAFE`.
+directory or its `.zip`. A burst pair's input is the bursts' extractor URLs, or bursts of SLC zips
+(`<zip>#IW<n>/<POL>/<index>`), comma-separated, whose scene is the product `burst2safe` would assemble from
+them; or that product's `.SAFE`.
 """
 function scene_source(input::String, platform::String)
     if startswith(platform, "S1")
         if platform == "S1-BURST" && is_burst_list(input)
             return SceneSource(input, SLCDatasets.asf_safe_name(burst_list(input, nothing)), input, "", "")
+        end
+        if platform == "S1-BURST" && is_zip_burst_list(input)
+            return SceneSource(input, SLCDatasets.asf_safe_name(zip_burst_list(input, nothing)), input, "", "")
         end
         base = basename(rstrip(input, '/'))
         name = endswith(base, ".SAFE") ? base[1:(end - 5)] : endswith(base, ".zip") ? base[1:(end - 4)] :

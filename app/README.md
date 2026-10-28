@@ -16,7 +16,7 @@ full option list.
 | `L4` `L5` `L7` `L8` `L9` | the scene's `_B2.TIF` (L4, L5) or `_B8.TIF` band with `_MTL.json` and `_ANG.txt` beside it, or its landsatlook STAC item |
 | `S2` | the `B08.jp2` inside the product's `.SAFE`, or its Earth Search STAC item |
 | `S1` | an IW SLC's `.SAFE` directory or `.zip` |
-| `S1BURST` | the bursts' extractor URLs, comma-separated, or the SAFE `burst2safe` assembles from them |
+| `S1BURST` | the IW SLC `.zip`s the bursts are in, comma-separated, with `--subset`; the bursts' extractor URLs, comma-separated; or the SAFE `burst2safe` assembles from them |
 | `NL1` `NL2` | a NISAR RSLC or GSLC `.h5` |
 
 Each input is a local path, an `s3://` URI or an `https://` URL; scenes are read in place, a window at a
@@ -26,8 +26,10 @@ and per tile. Landsat comes from requester-pays `s3://usgs-landsat`, so the AWS 
 that can pay. An Earthdata host (NISAR from ASF) is read with `EARTHDATA_TOKEN` or a token obtained with the
 `urs.earthdata.nasa.gov` entry of `~/.netrc`. Bursts come from ASF's burst extractor
 (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`, the URLs ASF's search lists),
-authenticated with the same `~/.netrc` entry; each burst's raster is downloaded into the run's scratch
-directory, and the product they make is the one `burst2safe` assembles from them. Sentinel-1 orbits are
+authenticated with the same `~/.netrc` entry, or out of their SLC zips (`src/s1subset.jl`: the bursts
+both passes hold that a `--subset` polygon covers at least half of, matched by subswath and time after the
+ascending node). Each burst's raster is downloaded, or inflated out of its zip up to the last burst needed,
+into the run's scratch directory, and the product they make is the one `burst2safe` assembles from them. Sentinel-1 orbits are
 fetched from the public `s1-orbits` bucket unless `--orbit-dir` holds them. A radar resample solves terrain
 against the ITS_LIVE parameter region's DEM plus the EGM2008 geoid unless `--dem` gives a geographic DEM of
 ellipsoidal heights.

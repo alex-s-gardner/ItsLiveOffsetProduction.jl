@@ -1,9 +1,10 @@
 #!/bin/bash
 # smoke.sh BUNDLE [STAGE] [GROUP...]
 #
-# Runs one fast pair of each sensor group (smoke_pairs.tsv) through BUNDLE's executable and checks that each
+# Runs one fast pair of each sensor group (smoke_pairs.tsv: group, sensor, reference, secondary and, for a
+# pair that takes one, a --subset polygon) through BUNDLE's executable and checks that each
 # reaches STAGE: geometry (the default), imagery or done. A run is stopped once its stage line appears on
-# stderr. `geometry` takes under 20 s per group, about a minute and a half for all eight, and exercises every
+# stderr. `geometry` takes under 20 s per group, under two minutes for all nine, and exercises every
 # setup path, which is where a changed signature surfaces; `done` runs the pairs to completion (about 10
 # minutes, and 25 more for NL2).
 #
@@ -24,11 +25,16 @@ scratch_root=${SMOKE_SCRATCH:-${TMPDIR:-/tmp}}
 limit=${SMOKE_LIMIT:-1800}
 fail=0
 printf '%-8s %-6s %7s  %s\n' group result seconds detail
-while IFS=$'\t' read -r group sensor ref sec; do
+while IFS=$'\t' read -r group sensor ref sec subset; do
   [ ${#groups[@]} -eq 0 ] || [[ " ${groups[*]} " == *" $group "* ]] || continue
   work=$(mktemp -d "$scratch_root/smoke.XXXXXX"); log=$work/log; : > "$log"
   t0=$(date +%s); result=FAIL; detail=
-  "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" > "$log" 2>&1 &
+  # `set -u` treats an empty array as unset before bash 4.4, so the option is spelled out in each branch.
+  if [ -n "${subset:-}" ]; then
+    "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" --subset "$subset" > "$log" 2>&1 &
+  else
+    "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" > "$log" 2>&1 &
+  fi
   pid=$!
   while kill -0 $pid 2>/dev/null; do
     if grep -q -E "$pat" "$log"; then result=PASS; break; fi

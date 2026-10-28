@@ -352,3 +352,49 @@ function field_int(feat, name::String)
     i < 0 && throw(ArgumentError("the feature has no field " * name))
     return Int(GDAL.ogr_f_getfieldasinteger64(feat, i))
 end
+
+"""
+    with_wkt_geometry(f, wkt)
+
+`f(geometry)` for the OGR geometry `wkt` describes, destroyed when `f` returns. A WKT that does not parse,
+or describes no area, is refused.
+"""
+function with_wkt_geometry(f::F, wkt::String) where {F}
+    g = Ref{GDAL.OGRGeometryH}(C_NULL)
+    GDAL.ogr_g_createfromwkt([wkt], C_NULL, g) == GDAL.OGRERR_NONE && g[] != C_NULL ||
+        throw(ArgumentError("\"" * wkt * "\" is not a WKT geometry"))
+    try
+        GDAL.ogr_g_area(g[]) > 0 || throw(ArgumentError("\"" * wkt * "\" encloses no area"))
+        return f(g[])
+    finally
+        GDAL.ogr_g_destroygeometry(g[])
+    end
+end
+
+"""
+    ring_overlap(geometry, ring) -> Float64
+
+The fraction of the area of the polygon the closed `ring` of `(x, y)` vertices encloses that lies inside
+`geometry`, in the units of the vertices.
+"""
+function ring_overlap(geometry::GDAL.OGRGeometryH, ring::Vector{NTuple{2,Float64}})
+    poly = GDAL.ogr_g_creategeometry(GDAL.wkbPolygon)
+    try
+        lr = GDAL.ogr_g_creategeometry(GDAL.wkbLinearRing)
+        for (x, y) in ring
+            GDAL.ogr_g_addpoint_2d(lr, x, y)
+        end
+        GDAL.ogr_g_addgeometrydirectly(poly, lr)
+        whole = GDAL.ogr_g_area(poly)
+        whole > 0 || return 0.0
+        part = GDAL.ogr_g_intersection(geometry, poly)
+        part == C_NULL && return 0.0
+        try
+            return GDAL.ogr_g_area(part) / whole
+        finally
+            GDAL.ogr_g_destroygeometry(part)
+        end
+    finally
+        GDAL.ogr_g_destroygeometry(poly)
+    end
+end
