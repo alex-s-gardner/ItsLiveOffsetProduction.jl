@@ -1,10 +1,10 @@
 #!/bin/bash
 # smoke.sh BUNDLE [STAGE] [GROUP...]
 #
-# Runs one fast pair of each sensor group (smoke_pairs.tsv: group, sensor, reference, secondary and, for a
-# pair that takes one, a --subset polygon) through BUNDLE's executable and checks that each
-# reaches STAGE: geometry (the default), imagery or done. A run is stopped once its stage line appears on
-# stderr. `geometry` takes under 20 s per group, under three minutes for all eleven, and exercises every
+# Runs one fast pair of each sensor group (smoke_pairs.tsv: group; sensor, `-` for the one the reference
+# implies; reference; secondary; and, for a pair that takes one, a --subset polygon) through BUNDLE's
+# executable and checks that each reaches STAGE: geometry (the default), imagery or done. A run is stopped once its stage line appears on
+# stderr. `geometry` takes under 20 s per group, under three minutes for all of them, and exercises every
 # setup path, which is where a changed signature surfaces; `done` runs the pairs to completion (about 10
 # minutes, and 25 more for NL2).
 #
@@ -29,7 +29,8 @@ while IFS=$'\t' read -r group sensor ref sec subset; do
   [ ${#groups[@]} -eq 0 ] || [[ " ${groups[*]} " == *" $group "* ]] || continue
   work=$(mktemp -d "$scratch_root/smoke.XXXXXX"); log=$work/log; : > "$log"
   t0=$(date +%s); result=FAIL; detail=
-  "$bin" "$sensor" "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" ${subset:+--subset "$subset"} > "$log" 2>&1 &
+  [ "$sensor" = - ] && sensor=
+  "$bin" ${sensor:+"$sensor"} "$ref" "$sec" "$work/out.nc" --scratch "$work/scratch" ${subset:+--subset "$subset"} > "$log" 2>&1 &
   pid=$!
   while kill -0 $pid 2>/dev/null; do
     if grep -q -E "$pat" "$log"; then result=PASS; break; fi

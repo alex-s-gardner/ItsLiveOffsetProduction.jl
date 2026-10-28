@@ -1,9 +1,10 @@
 # The command line.
 
 const USAGE = """
-usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [options]
+usage: autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
 
-  sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2
+  sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
+               a burst pair (S1BURST), with --subset.
   reference    a scene's band — a local path, an s3:// URI or an https:// URL — or its STAC item
   secondary    (a local .json or a URL). Landsat: the <scene>_B8.TIF (L7, L8, L9) or <scene>_B2.TIF
                (L4, L5) band, with <scene>_MTL.json and <scene>_ANG.txt beside it, or a landsatlook
@@ -19,7 +20,8 @@ usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> 
                (S1_342239_IW3_20211202T161351_VV_3876-BURST), comma-separated; each is resolved to
                the input above, NISAR granules and bursts through ASF's catalog (CMR), a burst to
                itself in its SLC's zip.
-  output.nc    where the ITS_LIVE product is written
+  output.nc    where the ITS_LIVE product is written; by default its ITS_LIVE name,
+               <ref>_X_<sec>_G0120V02_P<valid>.nc, in the working directory
 
 options:
   --scratch DIR        local scratch for the run's tile caches and a remote Sentinel-2 band (default:
@@ -37,6 +39,8 @@ options:
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
                        the bursts both scenes hold at least half of whose footprint it covers, read out
                        of the zips
+  --bucket NAME        upload the product to this S3 bucket, with the AWS credential chain's credentials
+  --bucket-prefix P    the key prefix it is uploaded under (default none)
   --quiet              no per-stage timings on stderr
 
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
@@ -46,16 +50,20 @@ plan their transforms alike, and discards what it measures.
 Landsat is read from s3://usgs-landsat, which is requester-pays: the AWS credential chain (environment,
 AWS_PROFILE, container or instance role) must name an account that can pay. A NISAR granule over https://
 from an Earthdata host is read with the token in EARTHDATA_TOKEN, or one obtained with the
-urs.earthdata.nasa.gov credentials in ~/.netrc. Sentinel-1 bursts are fetched from ASF's burst extractor
-with those ~/.netrc credentials, waiting while the extractor generates them, or inflated out of their SLC
+urs.earthdata.nasa.gov credentials in EARTHDATA_USERNAME and EARTHDATA_PASSWORD, or else in ~/.netrc (or
+the file NETRC names). Sentinel-1 bursts are fetched from ASF's burst extractor
+with those credentials, waiting while the extractor generates them, or inflated out of their SLC
 zips, which are read with the same credentials; either way into the run's scratch directory.
 """
 
 """
     Arguments
 
-A parsed command line: the job's inputs, the output path, the run options, the heap hint and the burst
-subset polygon (empty for none).
+A parsed command line: the job's inputs, the output path, the run options, the heap hint, the burst
+subset polygon, and the bucket and prefix the product is uploaded to. The sensor, the output path, the
+polygon and the bucket are empty when not given: the sensor is then the reference's
+([`infer_sensor`](@ref)), the product named as ITS_LIVE names it in the working directory, and nothing
+uploaded.
 """
 struct Arguments
     sensor::String
@@ -65,6 +73,8 @@ struct Arguments
     options::RunOptions
     heap_hint_gib::Float64
     subset::String
+    bucket::String
+    bucket_prefix::String
 end
 
 """
@@ -82,10 +92,13 @@ function parse_args(args::Vector{String})
     dem = ""
     orbit_dir = ""
     subset = ""
+    bucket = ""
+    bucket_prefix = ""
     i = 1
     while i <= length(args)
         a = args[i]
-        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset")
+        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset",
+                 "--bucket", "--bucket-prefix")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
             if a == "--scratch"
@@ -96,6 +109,10 @@ function parse_args(args::Vector{String})
                 orbit_dir = v
             elseif a == "--subset"
                 subset = v
+            elseif a == "--bucket"
+                bucket = v
+            elseif a == "--bucket-prefix"
+                bucket_prefix = v
             elseif a == "--cache-io"
                 v in ("pread", "mmap") || throw(ArgumentError("--cache-io is pread or mmap, got " * v))
                 cache_io = v == "pread" ? :pread : :mmap
@@ -119,11 +136,16 @@ function parse_args(args::Vector{String})
             i += 1
         end
     end
-    length(positional) == 4 || throw(ArgumentError(
-        "expected <sensor> <reference> <secondary> <output.nc>, got " * string(length(positional)) *
-        " positional arguments"))
-    return Arguments(uppercase(positional[1]), positional[2], positional[3], positional[4],
-                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint, subset)
+    # The sensor, when given, comes first; no scene input is a sensor code.
+    sensor = !isempty(positional) && is_sensor_code(positional[1]) ? uppercase(popfirst!(positional)) : ""
+    length(positional) in (2, 3) || throw(ArgumentError(
+        "expected [<sensor>] <reference> <secondary> [<output.nc>], got " * string(length(positional) +
+        !isempty(sensor)) * " positional arguments"))
+    output = length(positional) == 3 ? positional[3] : ""
+    (isempty(bucket) && !isempty(bucket_prefix)) && throw(ArgumentError("--bucket-prefix needs --bucket"))
+    return Arguments(sensor, positional[1], positional[2], output,
+                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint, subset, bucket,
+                     bucket_prefix)
 end
 
 # An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
@@ -172,9 +194,12 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         release_freed_memory!()
         set_heap_hint!(a.heap_hint_gib)
         AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
-        job = Job(a.sensor, a.reference, a.secondary; subset = a.subset)
-        path = run_job(job, a.output; options = a.options)
-        say("wrote " * path)
+        with_earthdata_netrc() do
+            sensor = isempty(a.sensor) ? infer_sensor(a.reference) : a.sensor
+            path = run_job(Job(sensor, a.reference, a.secondary; subset = a.subset), a.output; options = a.options)
+            say("wrote " * path)
+            isempty(a.bucket) || say("uploaded " * upload_product(path, a.bucket, a.bucket_prefix))
+        end
         return Cint(0)
     catch err
         say("error: " * error_message(err))

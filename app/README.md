@@ -4,8 +4,12 @@ One self-contained executable that runs the ITS_LIVE offset-production chain on 
 the product netCDF:
 
 ```
-autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [options]
+autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
 ```
+
+The sensor, when omitted, is the reference's (`infer_sensor` in `src/production.jl`); the output, when
+omitted, is the product's ITS_LIVE name (`<ref>_X_<sec>_G0120V02_P<valid>.nc`) in the working directory.
+`--bucket` and `--bucket-prefix` upload the product to S3 when it is written.
 
 The module is `AutoriftItsLiveProduction` (`src/`). It is built with `juliac --trim=safe`, so every value
 whose type would depend on file contents is resolved by an explicit branch; `src/cli.jl`'s `USAGE` is the
@@ -32,10 +36,10 @@ Each input is a local path, an `s3://` URI or an `https://` URL; scenes are read
 time. A Sentinel-2 band given as a URL is the exception: it is copied to the run's scratch directory first
 (about 125 MB each, both at once), because a JPEG 2000 file read in place costs a request per tile-part header
 and per tile. Landsat comes from requester-pays `s3://usgs-landsat`, so the AWS credential chain must name an account
-that can pay. An Earthdata host (NISAR from ASF) is read with `EARTHDATA_TOKEN` or a token obtained with the
-`urs.earthdata.nasa.gov` entry of `~/.netrc`. Bursts come from ASF's burst extractor
+that can pay. An Earthdata host (NISAR from ASF) is read with `EARTHDATA_TOKEN` or a token obtained with
+`EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, or else the `urs.earthdata.nasa.gov` entry of `~/.netrc`. Bursts come from ASF's burst extractor
 (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`, the URLs ASF's search lists),
-authenticated with the same `~/.netrc` entry, or out of their SLC zips (`src/s1subset.jl`: the bursts
+authenticated with the same credentials, or out of their SLC zips (`src/s1subset.jl`: the bursts
 both passes hold that a `--subset` polygon covers at least half of, matched by subswath and time after the
 ascending node). Each burst's raster is downloaded, or inflated out of its zip up to the last burst needed,
 into the run's scratch directory, and the product they make is the one `burst2safe` assembles from them. Sentinel-1 orbits are

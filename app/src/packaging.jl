@@ -88,6 +88,20 @@ function product_source(info::ItsLiveOffsetProduction.ImagePairInfo)
 end
 
 """
+    write_named_product(output, early, late, roi, input) -> String
+
+Write `input` to `output`, or, when `output` is empty, to the product's ITS_LIVE name for scenes `early`
+and `late` and valid percentage `roi` in the working directory, and return the path written.
+"""
+function write_named_product(output::String, early::String, late::String, roi::Float64,
+                             input::ItsLiveOffsetProduction.ItsLiveInput)
+    path = isempty(output) ? ItsLiveOffsetProduction.product_filename(early, late, roi) : output
+    isempty(dirname(path)) || mkpath(dirname(path))
+    ItsLiveOffsetProduction.write_product(path, input)
+    return path
+end
+
+"""
     package(s, c, output, lonlat)
 
 Write the product of setup `s` and correlation `c` to `output`. `lonlat` is the grid CRS's transform to
@@ -114,9 +128,7 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F) where {F}
         :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), nothing,
         georef, info, coeffs, refv, ssm, nothing, c.dx, c.dy, c.chip_size, c.scale, c.interpolated)
-    isempty(dirname(output)) || mkpath(dirname(output))
-    ItsLiveOffsetProduction.write_product(output, input)
-    return output
+    return write_named_product(output, s.early.name, s.late.name, roi, input)
 end
 
 """

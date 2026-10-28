@@ -256,6 +256,32 @@ vsimem_name(stem::String) = "/vsimem/" * stem * "_" * string(Threads.atomic_add!
 _argv(args::Vector{String}) = push!(Cstring[Base.unsafe_convert(Cstring, a) for a in args], Cstring(C_NULL))
 
 """
+    vsi_copy_file(source, target, options) -> Bool
+
+GDAL's `VSICopyFile` of `source` to `target` — a `/vsis3/` path uploads — with creation `options` such as
+`Content-Type=…`; whether it succeeded.
+"""
+function vsi_copy_file(source::String, target::String, options::Vector{String})
+    gdal_network_setup()
+    argv = _argv(options)
+    return GC.@preserve options argv (@ccall gc_safe = true GDAL.libgdal.VSICopyFile(
+        source::Cstring, target::Cstring, C_NULL::Ptr{Cvoid}, typemax(UInt64)::UInt64, pointer(argv)::Ptr{Cstring},
+        C_NULL::Ptr{Cvoid}, C_NULL::Ptr{Cvoid})::Cint) == 0
+end
+
+"""
+    vsi_set_tags(path, tags) -> Bool
+
+The object tags (`KEY=VALUE`) of a `/vsis3/` object set to `tags`; whether it succeeded.
+"""
+function vsi_set_tags(path::String, tags::Vector{String})
+    gdal_network_setup()
+    argv = _argv(tags)
+    return GC.@preserve tags argv (@ccall gc_safe = true GDAL.libgdal.VSISetFileMetadata(
+        path::Cstring, pointer(argv)::Ptr{Cstring}, "TAGS"::Cstring, C_NULL::Ptr{Cstring})::Cint) != 0
+end
+
+"""
     warp(src, flags, dest) -> Dataset
 
 `gdalwarp` of the one dataset `src` with command-line `flags`, written to `dest` — a `/vsimem/` path for an
