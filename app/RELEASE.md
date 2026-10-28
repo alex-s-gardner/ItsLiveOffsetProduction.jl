@@ -7,17 +7,23 @@ how a release is laid out; it ships at the root of every bundle and beside the r
 ## What you give it
 
 ```
-autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [options]
+autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
 ```
 
-- **`<sensor>`** names the kind of pair, from the table below.
+- **`<sensor>`** names the kind of pair, from the table below. Without it the sensor is the reference's: its
+  Landsat mission, `S2`, `S1` for an SLC, `S1BURST` for bursts or a list of SLC zips, `NL1` or `NL2`.
 - **`<reference>` and `<secondary>`** are the two scenes. Each is its scene ID (see "Scene IDs"), a local path,
   an `s3://` URI or an `https://` URL. Landsat and NISAR are read in place, a window at a time; Sentinel-2 bands, Sentinel-1 zip members and
   Sentinel-1 bursts are copied to scratch first. The pair is processed in acquisition order whichever scene you
   name first, and the product reports the earlier one as `id_img1`. The sensor must match the reference; for a
   NISAR pair the reference also decides the polarization (below). A scene of the wrong kind is refused with an
   error naming it.
-- **`<output.nc>`** is where the ITS_LIVE product netCDF is written, at the end of a successful run.
+- **`<output.nc>`** is where the ITS_LIVE product netCDF is written, at the end of a successful run. Without it
+  the product is written to the working directory under its ITS_LIVE name,
+  `<earlier>_X_<later>_G0120V02_P<valid>.nc`, `<valid>` the percentage of the searched grid with a result.
+- **`--bucket NAME`** and **`--bucket-prefix PREFIX`** upload the written product to
+  `s3://NAME/PREFIX/<file name>` as `application/x-netcdf`, tagged `file_type=product`, with the AWS
+  credential chain's credentials.
 
 | sensor | reference and secondary | credentials | scratch |
 |---|---|---|---|
@@ -54,7 +60,9 @@ Credentials are read from the environment:
   A burst pair from zips reads each subswath's measurement raster from its start to the last burst it needs,
   so a burst late in a slice costs most of that subswath's raster; the extractor serves each burst alone but
   generates it on first request, which can take a minute.
-  Set `EARTHDATA_TOKEN`, or put the `urs.earthdata.nasa.gov` entry in `~/.netrc`.
+  Set `EARTHDATA_TOKEN`; or `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, which the run writes to a private
+  `.netrc` of its own for the run's length; or put the `urs.earthdata.nasa.gov` entry in `~/.netrc` (or the
+  file `NETRC` names).
 - Sentinel-2 (the Google Cloud mirror) and Sentinel-1 orbits (the public `s1-orbits` bucket) need none.
 
 ## Examples

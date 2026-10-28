@@ -683,7 +683,5 @@ function package(s::RadarSetup, c::Correlation, output::String, lonlat::F) where
         :radar, DETECTION_METHOD, "radar, map", AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), s.pair.dt,
         georef, info, coeffs, refv, ssm, swath_bias, c.dx, c.dy, c.chip_size, c.scale, c.interpolated)
-    isempty(dirname(output)) || mkpath(dirname(output))
-    ItsLiveOffsetProduction.write_product(output, input)
-    return output
+    return write_named_product(output, s.early.name, s.late.name, roi, input)
 end

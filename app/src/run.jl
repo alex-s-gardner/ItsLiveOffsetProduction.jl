@@ -32,7 +32,8 @@ rpad_ascii(s::String, n::Int) = ncodeunits(s) >= n ? s : s * String(fill(UInt8('
 """
     run_job(c::Job, output; options = RunOptions()) -> String
 
-Run `c` end to end and write its ITS_LIVE product to `output`, returning the path. Every scene is read
+Run `c` end to end and write its ITS_LIVE product to `output`, returning the path. An empty `output` is the
+product's ITS_LIVE name ([`ItsLiveOffsetProduction.product_filename`](@ref)) in the working directory. Every scene is read
 from its source; nothing is staged locally except the run's tile caches and a remote Sentinel-2 band, under
 a directory of its own, deleted when the run ends, whether it succeeds or not. A scratch directory on a
 RAM-backed filesystem is refused before anything is read: see [`ram_backed_mount`](@ref).
@@ -42,6 +43,8 @@ killer) cannot delete its directory, so each run holds a lock on it ([`lock_run_
 run on the same scratch removes every directory whose lock nobody holds ([`remove_stale_runs`](@ref)).
 """
 function run_job(c::Job, output::String; options::RunOptions = RunOptions())
+    # Assigned inside the `try`, whose scope is its own.
+    path = ""
     mkpath(options.scratch)
     fs = ram_backed_mount(options.scratch)
     isempty(fs) || throw(ArgumentError(
@@ -67,7 +70,7 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
             end
             foreach(_await, ss.pending)
             _log(options, "imagery", t0)
-            _correlate(c, ss, img, output, options, dir)
+            path = _correlate(c, ss, img, output, options, dir)
         elseif c.platform == "NISAR-L1"
             t0 = time_ns()
             rs = radar_setup(c)
@@ -83,7 +86,7 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
                 img = radar_imagery(rs, gdem, _await(ref)::TileFile; dir, cache_io = options.cache_io)
             end
             _log(options, "imagery", t0)
-            _correlate(c, rs, img, output, options, dir)
+            path = _correlate(c, rs, img, output, options, dir)
         else
             t0 = time_ns()
             j = stage_bands(c, dir)
@@ -94,13 +97,13 @@ function run_job(c::Job, output::String; options::RunOptions = RunOptions())
             t0 = time_ns()
             img = native_imagery(s; dir, cache_io = options.cache_io)
             _log(options, "imagery", t0)
-            _correlate(j, s, img, output, options, dir)
+            path = _correlate(j, s, img, output, options, dir)
         end
     finally
         rm(dir; recursive = true, force = true)
         close(held)
     end
-    return output
+    return path
 end
 
 const LOCK_EX = Cint(2)
@@ -190,7 +193,6 @@ function _correlate(c::Job, s, img::Imagery, output::String, options::RunOptions
     finally
         close(img)
     end
-    return nothing
 end
 
 function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
@@ -200,7 +202,7 @@ function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
     c = correlate(s, img, pre; filter_tile, cache_io = o.cache_io, masked, scratch = dir)
     _log(o, "correlate", t0)
     t0 = time_ns()
-    package(s, c, output)
+    path = package(s, c, output)
     _log(o, "package", t0)
-    return nothing
+    return path
 end

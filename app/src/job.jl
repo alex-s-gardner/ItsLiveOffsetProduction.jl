@@ -16,6 +16,8 @@ struct SensorSpec
 end
 
 const LANDSAT_SCENE = r"^L[TEOC]0[45789]_"
+# A Sentinel-2 product's `.SAFE` directory in a path or URL, capturing the product name.
+const S2_SAFE = r"(S2[ABC]_MSIL1C_[0-9A-Z_]+?)\.SAFE"
 
 const SENSORS = (
     SensorSpec("L4", "L4", r"^LT04_", LANDSAT_SCENE),
@@ -32,6 +34,9 @@ const SENSORS = (
 
 # The sensors the command line names that this build does not process.
 const UNBUILT_SENSORS = String[]
+
+# Whether `s` names a sensor the command line knows, built or not.
+is_sensor_code(s::String) = (u = uppercase(s); any(x -> x.code == u, SENSORS) || u in UNBUILT_SENSORS)
 
 function sensor_spec(code::String)
     for s in SENSORS
@@ -133,7 +138,7 @@ function scene_source(input::String, platform::String)
     if platform == "S2"
         is_stac_item(input) && return _s2_from_item(input)
         occursin(S2_ID, input) && return SceneSource(input, input, s2_band_url(input), "", "")
-        m = match(r"(S2[ABC]_MSIL1C_[0-9A-Z_]+?)\.SAFE", input)
+        m = match(S2_SAFE, input)
         m === nothing && throw(ArgumentError("cannot tell which Sentinel-2 product \"" * input * "\" is in; " *
                                              "give the B08.jp2 inside its .SAFE, its STAC item or its ID"))
         endswith(lowercase(input), "b08.jp2") || throw(ArgumentError(

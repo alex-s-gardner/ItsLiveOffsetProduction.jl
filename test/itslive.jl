@@ -247,6 +247,16 @@ end
     @test_throws "requires swath_bias to be nothing" write_product(tempname() * ".nc", input)
 end
 
+@testset "product_filename follows the reference's naming" begin
+    a = "LC08_L1TP_009011_20200703_20200913_02_T1"
+    b = "LC08_L1TP_009011_20200820_20200905_02_T1"
+    @test ItsLiveOffsetProduction.product_filename(a, b, 78.4) == a * "_X_" * b * "_G0120V02_P078.nc"
+    @test ItsLiveOffsetProduction.product_filename(a, b, 100.0) == a * "_X_" * b * "_G0120V02_P100.nc"
+    # Below one percent floors to the uncropped product's suffix.
+    @test ItsLiveOffsetProduction.product_filename(a, b, 0.9) == a * "_X_" * b * "_G0120V02_P000.nc"
+    @test ItsLiveOffsetProduction.product_filename(a, b, 5.0) == a * "_X_" * b * "_G0120V02_P005.nc"
+end
+
 @testset "roi_valid_percentage quantizes the fraction, not the percentage" begin
     # The reference quantizes to three decimals as a *fraction* and only then scales by 100
     # (`testautoRIFT.py:1366`), so the result lands on a whole tenth of a percent. 8 of 9 is

@@ -588,6 +588,18 @@ function roi_valid_percentage(chip_size_x::AbstractArray,
     return round(Int, resolved / searched * 1000) / 1000 * 100
 end
 
+"""
+    product_filename(img1, img2, roi_valid_percentage) -> String
+
+The ITS_LIVE name of the product of scenes `img1` (the earlier) and `img2`:
+`<img1>_X_<img2>_G0120V02_P<valid>.nc`, the valid percentage floored to three digits
+(`testautoRIFT.py:1086-1088`). A name ending `_P000.nc` is the one product [`write_product`](@ref) leaves
+uncropped.
+"""
+product_filename(img1::AbstractString, img2::AbstractString, roi_valid_percentage::Real) =
+    string(img1, "_X_", img2, "_G", string(round(Int, PIXEL_SIZE); pad = 4), "V02_P",
+           string(floor(Int, roi_valid_percentage); pad = 3), ".nc")
+
 function _satellite_attribute(info::ImagePairInfo)
     haskey(MISSION_NAMES, info.mission_img1) ||
         throw(ArgumentError("unrecognized mission code $(info.mission_img1)"))
