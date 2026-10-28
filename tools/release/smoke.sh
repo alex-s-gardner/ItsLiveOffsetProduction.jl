@@ -4,7 +4,7 @@
 # Runs one fast pair of each sensor group (smoke_pairs.tsv: group, sensor, reference, secondary and, for a
 # pair that takes one, a --subset polygon) through BUNDLE's executable and checks that each
 # reaches STAGE: geometry (the default), imagery or done. A run is stopped once its stage line appears on
-# stderr. `geometry` takes under 20 s per group, under two minutes for all nine, and exercises every
+# stderr. `geometry` takes under 20 s per group, under three minutes for all eleven, and exercises every
 # setup path, which is where a changed signature surfaces; `done` runs the pairs to completion (about 10
 # minutes, and 25 more for NL2).
 #

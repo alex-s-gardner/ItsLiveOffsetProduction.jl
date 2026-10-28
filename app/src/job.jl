@@ -1,5 +1,5 @@
 # A job: the sensor, and the two scenes resolved from the inputs the caller gave — a path, an `s3://` or
-# `https://` URL, or a STAC item.
+# `https://` URL, a STAC item, or a scene ID (`sceneid.jl`).
 
 """
     SensorSpec
@@ -74,6 +74,8 @@ end
 
 function Job(sensor::String, reference::String, secondary::String; subset::String = "")
     spec = sensor_spec(sensor)
+    given = (reference, secondary)
+    spec.platform == "S1-BURST" && ((reference, secondary) = resolve_burst_ids(reference, secondary))
     if !isempty(subset)
         spec.platform == "S1-BURST" || throw(ArgumentError(
             "--subset selects the bursts of a Sentinel-1 burst pair (S1BURST); sensor " * sensor * " takes none"))
@@ -87,9 +89,9 @@ function Job(sensor::String, reference::String, secondary::String; subset::Strin
     ref = scene_source(reference, spec.platform)
     sec = scene_source(secondary, spec.platform)
     occursin(spec.reference, ref.name) || throw(ArgumentError(
-        "the reference input \"" * reference * "\" is scene " * ref.name * ", which is not a " * sensor * " scene"))
+        "the reference input \"" * given[1] * "\" is scene " * ref.name * ", which is not a " * sensor * " scene"))
     occursin(spec.secondary, sec.name) || throw(ArgumentError(
-        "the secondary input \"" * secondary * "\" is scene " * sec.name * ", which cannot pair with a " *
+        "the secondary input \"" * given[2] * "\" is scene " * sec.name * ", which cannot pair with a " *
         sensor * " scene"))
     return Job(sensor, spec.platform, ref, sec, ref.name * "_X_" * sec.name)
 end
@@ -104,10 +106,13 @@ landsatlook STAC item, whose assets name all three. A Sentinel-2 input is the `B
 public Google Cloud mirror. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
 directory or its `.zip`. A burst pair's input is the bursts' extractor URLs, or bursts of SLC zips
 (`<zip>#IW<n>/<POL>/<index>`), comma-separated, whose scene is the product `burst2safe` would assemble from
-them; or that product's `.SAFE`.
+them; or that product's `.SAFE`. Any but a burst pair's may also be the scene's ID (`sceneid.jl`): a Landsat
+ID names its landsatlook STAC item, a Sentinel-2 ID its band on the mirror, a Sentinel-1 ID its zip at ASF
+and a NISAR ID the `.h5` CMR lists.
 """
 function scene_source(input::String, platform::String)
     if startswith(platform, "S1")
+        is_s1_slc_id(input) && return SceneSource(input, s1_slc_name(input), s1_slc_url(s1_slc_name(input)), "", "")
         if platform == "S1-BURST" && is_burst_list(input)
             return SceneSource(input, SLCDatasets.asf_safe_name(burst_list(input, nothing)), input, "", "")
         end
@@ -116,28 +121,31 @@ function scene_source(input::String, platform::String)
         end
         base = basename(rstrip(input, '/'))
         name = endswith(base, ".SAFE") ? base[1:(end - 5)] : endswith(base, ".zip") ? base[1:(end - 4)] :
-               throw(ArgumentError("\"" * input * "\" is neither a Sentinel-1 product's .SAFE nor its .zip"))
+               throw(ArgumentError("\"" * input * "\" is neither a Sentinel-1 product's .SAFE, its .zip nor its ID"))
         return SceneSource(input, String(name), input, "", "")
     end
     if startswith(platform, "NISAR")
+        occursin(NISAR_ID, input) && return SceneSource(input, input, nisar_url(input), "", "")
         base = basename(input)
-        endswith(base, ".h5") || throw(ArgumentError("\"" * input * "\" is not a NISAR granule's .h5"))
+        endswith(base, ".h5") || throw(ArgumentError("\"" * input * "\" is neither a NISAR granule's .h5 nor its ID"))
         return SceneSource(input, base[1:(end - 3)], input, "", "")
     end
     if platform == "S2"
         is_stac_item(input) && return _s2_from_item(input)
+        occursin(S2_ID, input) && return SceneSource(input, input, s2_band_url(input), "", "")
         m = match(r"(S2[ABC]_MSIL1C_[0-9A-Z_]+?)\.SAFE", input)
         m === nothing && throw(ArgumentError("cannot tell which Sentinel-2 product \"" * input * "\" is in; " *
-                                             "give the B08.jp2 inside its .SAFE, or its STAC item"))
+                                             "give the B08.jp2 inside its .SAFE, its STAC item or its ID"))
         endswith(lowercase(input), "b08.jp2") || throw(ArgumentError(
             "\"" * input * "\" is not the B08 band the Sentinel-2 chain correlates"))
         return SceneSource(input, String(something(m.captures[1])), input, "", "")
     end
     is_stac_item(input) && return _landsat_from_item(input)
+    occursin(LANDSAT_ID, input) && return _landsat_from_item(LANDSAT_STAC_ITEMS * input)
     base = basename(input)
-    m = match(r"^(L[TEOC]0[45789]_L1\w\w_\d{6}_\d{8}_\d{8}_\d{2}_\w{2})_B(\d+)\.TIF$"i, base)
+    m = match(LANDSAT_BAND_FILE, base)
     m === nothing && throw(ArgumentError("\"" * input * "\" is not a Landsat Collection 2 band file " *
-                                         "(<scene>_B<n>.TIF) or a STAC item"))
+                                         "(<scene>_B<n>.TIF), a STAC item or a scene ID"))
     name = String(something(m.captures[1]))
     band = "B" * String(something(m.captures[2]))
     want = landsat_band_file(_landsat_platform(name))
