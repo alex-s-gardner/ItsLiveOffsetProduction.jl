@@ -204,7 +204,7 @@ version = "1.0.0"
 
 [[deps.ChunkManifests]]
 deps = ["Base64", "CRC32c", "Dates", "HDF5_jll", "HTTP", "JSON", "LibCURL", "LibCURL_jll", "Libdl", "Logging", "Mmap", "NetworkOptions", "PrecompileTools", "Proj", "SHA", "Zarr", "ZarrCore", "Zlib_jll"]
-git-tree-sha1 = "9dc669a0ce988826088743e91ded348aa0eb64cb"
+git-tree-sha1 = "f2d0b9d6c68fab4ad591eeda3c65b408292263ff"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/ChunkManifests.jl"
 uuid = "558bc7c3-2be7-4981-9bcf-ba6cea128854"
@@ -922,7 +922,7 @@ version = "0.1.0"
 
 [[deps.SLCDatasets]]
 deps = ["ChunkManifests", "Dates", "DiskArrays", "EzXML", "StaticArrays", "Zarr", "ZarrCore", "ZarrZlib"]
-git-tree-sha1 = "1cc239d751fa9416a3eb504f045b4db47e23713e"
+git-tree-sha1 = "5aee8df9f642b8b466d84dda014eda91ccbd79d8"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/SLCDatasets.jl"
 uuid = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
