@@ -11,8 +11,8 @@ autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [option
 ```
 
 - **`<sensor>`** names the kind of pair, from the table below.
-- **`<reference>` and `<secondary>`** are the two scenes. Each is a local path, an `s3://` URI or an `https://`
-  URL. Landsat and NISAR are read in place, a window at a time; Sentinel-2 bands, Sentinel-1 zip members and
+- **`<reference>` and `<secondary>`** are the two scenes. Each is its scene ID (see "Scene IDs"), a local path,
+  an `s3://` URI or an `https://` URL. Landsat and NISAR are read in place, a window at a time; Sentinel-2 bands, Sentinel-1 zip members and
   Sentinel-1 bursts are copied to scratch first. The pair is processed in acquisition order whichever scene you
   name first, and the product reports the earlier one as `id_img1`. The sensor must match the reference; for a
   NISAR pair the reference also decides the polarization (below). A scene of the wrong kind is refused with an
@@ -29,6 +29,21 @@ autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [option
 | `S1BURST` | for each pass, the IW SLC `.zip`s its bursts are in, comma-separated, with `--subset` naming the area; or the extractor URLs of its bursts, comma-separated (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`); or the SAFE `burst2safe` assembles. The bursts the two passes share | Earthdata | 18 GB |
 | `NL1` | two NISAR RSLC `.h5` granules of one frame | Earthdata | 67 GB |
 | `NL2` | two NISAR GSLC `.h5` granules of one frame | Earthdata | about 50 GB |
+
+### Scene IDs
+
+A scene may be named by its ID alone, and is then read from where its provider serves it:
+
+| ID | read from |
+|---|---|
+| Landsat, `LC08_L1TP_021248_20210507_20210517_02_T1` | its landsatlook STAC item |
+| Sentinel-2, `S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221` | its `B08.jp2` on the Google Cloud mirror |
+| Sentinel-1 SLC, `S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE` | its zip at ASF |
+| Sentinel-1 burst (`S1BURST`), `S1_342239_IW3_20211202T161351_VV_3876-BURST` | its SLC's zip at ASF, which ASF's catalog (CMR) names |
+| NISAR, `NISAR_L1_PR_RSLC_008_155_D_055_7700_SHNA_A_20251226T225459_20251226T225536_X05009_N_P_J_001` | its `.h5` at ASF, as CMR lists it |
+
+A burst pair's scenes are their burst IDs, comma-separated. Each burst is read out of its SLC's zip as with
+`--subset`, so a burst late in a slice costs most of its subswath's raster.
 
 Credentials are read from the environment:
 

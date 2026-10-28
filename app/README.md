@@ -19,6 +19,15 @@ full option list.
 | `S1BURST` | the IW SLC `.zip`s the bursts are in, comma-separated, with `--subset`; the bursts' extractor URLs, comma-separated; or the SAFE `burst2safe` assembles from them |
 | `NL1` `NL2` | a NISAR RSLC or GSLC `.h5` |
 
+An input may also be the scene ID alone (`src/sceneid.jl`): `LC08_L1TP_021248_20210507_20210517_02_T1`,
+`S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221`,
+`S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE`, a NISAR granule ID, or for `S1BURST`
+burst IDs such as `S1_342239_IW3_20211202T161351_VV_3876-BURST`, comma-separated. Landsat IDs become their
+landsatlook STAC item, Sentinel-2 IDs their `B08.jp2` on the Google Cloud mirror and Sentinel-1 SLC IDs their
+zip at ASF. NISAR and burst IDs are looked up in ASF's catalog (CMR): a NISAR granule's directory carries its
+collection's version, and a burst's record names the SLC that holds it and its index there, so the burst is
+read out of that SLC's zip.
+
 Each input is a local path, an `s3://` URI or an `https://` URL; scenes are read in place, a window at a
 time. A Sentinel-2 band given as a URL is the exception: it is copied to the run's scratch directory first
 (about 125 MB each, both at once), because a JPEG 2000 file read in place costs a request per tile-part header

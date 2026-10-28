@@ -14,6 +14,11 @@ usage: autorift_itslive_production <sensor> <reference> <secondary> <output.nc> 
                (https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff); or the
                SAFE burst2safe assembles from them.
                NISAR: the RSLC (NL1) or GSLC (NL2) granule's .h5.
+               Or the scene ID alone: a Landsat scene (LC08_L1TP_021248_20210507_20210517_02_T1),
+               a Sentinel-2 product, a Sentinel-1 SLC, a NISAR granule, or for S1BURST the bursts
+               (S1_342239_IW3_20211202T161351_VV_3876-BURST), comma-separated; each is resolved to
+               the input above, NISAR granules and bursts through ASF's catalog (CMR), a burst to
+               itself in its SLC's zip.
   output.nc    where the ITS_LIVE product is written
 
 options:
