@@ -43,6 +43,7 @@ include("packaging.jl")
 include("radar.jl")
 include("s1orbit.jl")
 include("s1.jl")
+include("s1subset.jl")
 include("run.jl")
 include("cli.jl")
 

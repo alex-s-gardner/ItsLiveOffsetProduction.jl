@@ -57,11 +57,13 @@ first read.
 burst_list(input::String, dir::Union{Nothing,String}) =
     [SLCDatasets.AsfBurst(strip(u); dir) for u in split(input, ','; keepempty = false)]
 
-# A scene's product, opened for `swaths`. Extracted bursts are downloaded, and a zip's rasters inflated,
-# into `scratch`.
+# A scene's product, opened for `swaths`. Extracted bursts are downloaded, and a zip's rasters or bursts
+# inflated, into `scratch`.
 function open_s1(scene::SceneSource, swaths::Vector{Int}, orbit_dir::String, scratch::String)
     orbit = s1_orbit_file(scene.name, orbit_dir, scratch)
     is_burst_list(scene.band) && return SLCDatasets.Sentinel1Product(burst_list(scene.band, scratch); orbit, swaths)
+    is_zip_burst_list(scene.band) &&
+        return SLCDatasets.Sentinel1Product(zip_burst_list(scene.band, scratch); orbit, swaths)
     return SLCDatasets.Sentinel1Product(scene.band; orbit, polarization = s1_polarization(scene.name), swaths,
                                         dir = scratch)
 end
@@ -161,6 +163,8 @@ function s1_setup(c::Job, orbit_dir::String, scratch::String)
     early, late = acquisition_order(c)
     sws = c.platform == "S1-SLC" ? collect(S1_SWATHS) :
           is_burst_list(c.reference.band) ? sort!(unique([b.swath for b in burst_list(c.reference.band, nothing)])) :
+          is_zip_burst_list(c.reference.band) ?
+          sort!(unique([b.swath for b in zip_burst_list(c.reference.band, nothing)])) :
           product_swaths(c.reference.band, s1_polarization(c.reference.name))
     # The two products open together. Their rasters then download or inflate while the geometry is solved
     # and the DEM read — the reference's first, so its mosaic can be filled while the secondary's arrive.
@@ -172,8 +176,7 @@ function s1_setup(c::Job, orbit_dir::String, scratch::String)
     ref, ref_start = s1_mosaic(rp, sws)
     _, sec_start = s1_mosaic(sp, sws)
     pair = CoregisteredPair(ref; dt = SLCDatasets.seconds_between(ref_start, sec_start))
-    b = footprint_bounds(IdentityTransform(), pair.coordinate)
-    region = parameter_region((b.X[1] + b.X[2]) / 2, (b.Y[1] + b.Y[2]) / 2)
+    region = parameter_region(geodetic_centroid(pair.coordinate)...)
     grid = parameter_grid(region)
     nd = with_dataset(band_nodata, region.paths[4])
     g = FGP.native_crs(region.epsg)
@@ -553,7 +556,7 @@ function secondary_mosaic(rp::S1Product, bursts, pieces, box::MosaicBox, raster_
     return BurstMosaic(SecondaryBursts(sources, bursts), pieces, (box.nlines, box.nsamples))
 end
 
-# A product's subswath measurement raster: a file of a `.SAFE`, a zip's member inflated, or extracted bursts.
+# A product's subswath measurement raster: a file of a `.SAFE`, a zip's member inflated, or assembled bursts.
 function _swath_raster(p::S1Product, sw::Int)
     return SLCDatasets.burst_raster(SLCDatasets.bursts(p, sw)[1].backend).raster
 end
@@ -571,7 +574,7 @@ function s1_imagery(s::RadarSetup, dem::D; dir::String, cache_io::Symbol) where 
     # are still being fetched; only the two products' annotations, orbits and the DEM come before it.
     assembled = !isempty(rp.bursts)
     assembled == !isempty(sp.bursts) || throw(ArgumentError(
-        "the two Sentinel-1 products must be given alike: both as products, or both as extractor URLs"))
+        "the two Sentinel-1 products must be given alike: both as products, or both as bursts"))
     assembled && return _s1_imagery(s, dem, sw -> _swath_raster(rp, sw)::SLCDatasets.BurstStack,
                                     sw -> _swath_raster(sp, sw)::SLCDatasets.BurstStack; dir, cache_io)
     return _s1_imagery(s, dem, sw -> _swath_raster(rp, sw)::SLCDatasets.MeasurementRaster,

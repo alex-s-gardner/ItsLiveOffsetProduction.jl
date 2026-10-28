@@ -44,3 +44,17 @@ jobs:
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+
+  app:
+    name: app - Julia 1 - ubuntu-latest
+    runs-on: ubuntu-latest
+    # The executable's own suite: the geometry rules a run applies before it reads a scene, which need no
+    # network or credentials. The app pins its dependencies to unregistered branches through `[sources]`.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - run: julia --project=app -e 'import Pkg; Pkg.instantiate(); Pkg.test()'

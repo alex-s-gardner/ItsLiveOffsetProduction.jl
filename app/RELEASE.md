@@ -26,7 +26,7 @@ autorift_itslive_production <sensor> <reference> <secondary> <output.nc> [option
 | `L8` `L9` | the same, with a Landsat 8 or 9 reference and the panchromatic band (`_B8.TIF`) | AWS | 5 GB |
 | `S2` | two Sentinel-2 L1C products: the `B08.jp2` inside the product's `.SAFE`, or its Earth Search STAC item | none | 2.5 GB |
 | `S1` | two Sentinel-1 IW SLC products: the `.SAFE` directory or the `.zip` | Earthdata | 30 GB |
-| `S1BURST` | for each pass, the extractor URLs of its bursts, comma-separated (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`), or the SAFE `burst2safe` assembles; the bursts the two passes share | Earthdata | 18 GB |
+| `S1BURST` | for each pass, the IW SLC `.zip`s its bursts are in, comma-separated, with `--subset` naming the area; or the extractor URLs of its bursts, comma-separated (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`); or the SAFE `burst2safe` assembles. The bursts the two passes share | Earthdata | 18 GB |
 | `NL1` | two NISAR RSLC `.h5` granules of one frame | Earthdata | 67 GB |
 | `NL2` | two NISAR GSLC `.h5` granules of one frame | Earthdata | about 50 GB |
 
@@ -36,6 +36,9 @@ Credentials are read from the environment:
   `AWS_PROFILE`, or the instance role) must name an account that can pay. Run in `us-west-2` to avoid transfer
   charges.
 - **Earthdata**: NISAR granules, Sentinel-1 zips and Sentinel-1 bursts are read from ASF with Earthdata Login.
+  A burst pair from zips reads each subswath's measurement raster from its start to the last burst it needs,
+  so a burst late in a slice costs most of that subswath's raster; the extractor serves each burst alone but
+  generates it on first request, which can take a minute.
   Set `EARTHDATA_TOKEN`, or put the `urs.earthdata.nasa.gov` entry in `~/.netrc`.
 - Sentinel-2 (the Google Cloud mirror) and Sentinel-1 orbits (the public `s1-orbits` bucket) need none.
 
@@ -75,7 +78,22 @@ $X S1 $A/S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE.zip
       $A/S1A_IW_SLC__1SDV_20211130T161558_20211130T161625_040803_04D7FE_C225.zip s1.nc --scratch /mnt/nvme/scratch
 ```
 
-**Sentinel-1 bursts**: the bursts of each pass, comma-separated (here IW3, VV, bursts 3 to 6 of both passes):
+**Sentinel-1 bursts from SLC zips**: each pass's zips, comma-separated, and a polygon (longitude, latitude)
+whose bursts are correlated: each burst both passes hold at least half of whose footprint the polygon covers.
+The polygon is a WKT `POLYGON` or `MULTIPOLYGON`; one crossing the antimeridian is given split at ±180°,
+as OPERA stores its frames, and its pieces are rejoined.
+Here OPERA frame 6527, 27 bursts across two slices of each pass:
+
+```bash
+A=https://datapool.asf.alaska.edu/SLC/SB
+$X S1BURST $A/S1B_IW_SLC__1SDH_20180630T095955_20180630T100022_011601_015537_A96A.zip,$A/S1B_IW_SLC__1SDH_20180630T095929_20180630T095957_011601_015537_164D.zip \
+           $A/S1B_IW_SLC__1SDH_20180712T095955_20180712T100022_011776_015AA2_1C61.zip,$A/S1B_IW_SLC__1SDH_20180712T095930_20180712T095958_011776_015AA2_0514.zip \
+           frame6527.nc --scratch /mnt/nvme/scratch \
+           --subset 'POLYGON ((-54.566829 68.120827, -53.843994 69.633187, -47.505678 69.239085, -48.620562 67.757728, -54.566829 68.120827))'
+```
+
+**Sentinel-1 bursts from the extractor**: the bursts of each pass, comma-separated (here IW3, VV, bursts 3 to 6 of
+both passes):
 
 ```bash
 R=https://sentinel1-burst.asf.alaska.edu/S1A_IW_SLC__1SDV_20211202T161342_20211202T161411_040832_04D8FA_3876/IW3/VV
