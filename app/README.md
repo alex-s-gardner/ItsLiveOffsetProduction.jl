@@ -60,6 +60,17 @@ app/build_linux.sh <outdir>    # linux/x86_64, in an amd64 Julia container
 (`julia +release --project=@jcdrv -e 'import Pkg; Pkg.add("JuliaC")'` once). The bundle under `outdir` is
 relocatable as a whole.
 
+`.github/workflows/Release.yml` builds the three bundles on GitHub's runners (`linux-x86_64`,
+`linux-aarch64`, `macos-arm64`), each with `build.sh` on its own platform. A trimmed build with any
+verifier error fails the job. Each bundle is packed with `tools/release/pack.sh`.
+
+- A `v*` tag attaches the bundles, their `.sha256` and a `manifest.json` to that tag's GitHub Release, and
+  pushes the container image (`Dockerfile`: the Linux bundles on `debian:bookworm-slim`, linux/amd64 and
+  linux/arm64) to `ghcr.io/alex-s-gardner/itsliveoffsetproduction.jl` as `<tag>` and `latest`.
+- Run workflow on GitHub builds any branch, keeping the bundles as workflow artifacts for 30 days. From
+  `main` it also pushes the image as `<version>` (`git describe`) and `test`.
+- The copy under `s3://its-live-data/production_code/image_pair/` is made by hand.
+
 ## Threads and FFTW wisdom
 
 A `juliac` executable reads its thread count and AutoRIFT its FFTW wisdom directory only at start-up, so

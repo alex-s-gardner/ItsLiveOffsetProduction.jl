@@ -1,0 +1,177 @@
+name: Release
+
+# The `autorift_itslive_production` bundles, built with `juliac --trim=safe` on each platform's own runner,
+# and the Linux container image made from them.
+#
+#   - a `v*` tag: build, attach the bundles and `manifest.json` to that tag's GitHub Release, and push the
+#     image as `<tag>` and `latest`;
+#   - Run workflow (manual): build from the chosen branch and keep the bundles as workflow artifacts; from
+#     `main`, also push the image as `<version>` and `test`, the version `git describe` names;
+#   - a pull request that changes how a release is built: build the bundles and the image, publish nothing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/Release.yml
+      - Dockerfile
+      - .dockerignore
+      - app/build.sh
+      - app/link_libraries.sh
+      - tools/release/pack.sh
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/alex-s-gardner/itsliveoffsetproduction.jl
+
+jobs:
+  bundle:
+    name: bundle ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    # A trimmed build compiles the whole closure; most of the time is instantiating and precompiling it.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-x86_64, runner: ubuntu-24.04}
+          - {platform: linux-aarch64, runner: ubuntu-24.04-arm}
+          # The build's largest process peaks near 7.3 GB, about the 7 GB this runner has.
+          - {platform: macos-arm64, runner: macos-15}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        # A tag release is named by its tag; any other build by its distance from the last tag.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --tags --long --match '*[0-9]*'); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/setup-julia@v2
+        with:
+          # The version `app/Manifest.toml` was resolved with.
+          version: '1.13.0'
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: release-${{ matrix.platform }}
+      - name: Install JuliaC
+        run: julia -e 'import Pkg; Pkg.activate("jcdrv"; shared = true); Pkg.add(name = "JuliaC", version = "0.3.9")'
+      - name: Build
+        env:
+          TRIM_JULIA: julia
+        run: |
+          bundle=$RUNNER_TEMP/autorift_itslive_production-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          # `juliac` reports verifier errors and still writes an executable for some of them.
+          if grep -q 'Verifier error' "$RUNNER_TEMP/build.log"; then echo "::error::the trimmed build has verifier errors"; exit 1; fi
+          echo "BUNDLE=$bundle" >> "$GITHUB_ENV"
+      - name: Start in a bare Debian
+        # The bundle needs nothing of the host but the C library and loader.
+        if: runner.os == 'Linux'
+        run: docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1 | head -1 | grep '^usage:'
+      - name: Pack
+        run: tools/release/pack.sh "$BUNDLE" "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ runner.temp }}/dist/
+          retention-days: 30
+
+  release:
+    name: GitHub Release
+    if: github.ref_type == 'tag'
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write manifest.json
+        env:
+          VERSION: ${{ needs.bundle.outputs.version }}
+        run: |
+          cd dist
+          platforms='{}'
+          for f in *.tar.zst; do
+            p=${f#autorift_itslive_production-"$VERSION"-}; p=${p%.tar.zst}
+            platforms=$(jq --arg p "$p" --arg f "$f" --argjson s "$(wc -c < "$f")" --arg h "$(cut -d' ' -f1 "$f.sha256")" \
+              '. + {($p): {file: $f, size_bytes: $s, sha256: $h}}' <<< "$platforms")
+          done
+          jq -n --arg v "$VERSION" --arg c "$GITHUB_SHA" --arg r "$GITHUB_REPOSITORY" --arg t "$(date -u +%Y-%m-%dT%H:%MZ)" \
+            --argjson p "$platforms" \
+            '{name: "autorift_itslive_production", version: $v, commit: $c, repository: $r, built_utc: $t,
+              julia: "1.13.0", juliac: "0.3.9, --trim=safe", verifier_errors: 0,
+              archive: "tar.zst; extract, then run bin/autorift_itslive_production; README.md in the bundle describes it",
+              platforms: $p}' > manifest.json
+          cat manifest.json
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          gh release upload "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" dist/* --clobber
+
+  image:
+    name: container image
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          path: dist
+          merge-multiple: true
+      - name: Stage the bundles
+        env:
+          VERSION: ${{ needs.bundle.outputs.version }}
+        run: |
+          for pair in amd64:linux-x86_64 arm64:linux-aarch64; do
+            arch=${pair%%:*}; platform=${pair#*:}
+            mkdir -p "$arch/autorift_itslive_production"
+            zstd -dc "dist/autorift_itslive_production-$VERSION-$platform.tar.zst" |
+              tar -xf - -C "$arch/autorift_itslive_production" --strip-components=1
+          done
+      - name: Tags
+        id: tags
+        env:
+          VERSION: ${{ needs.bundle.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "tags=$IMAGE:$VERSION,$IMAGE:latest" >> "$GITHUB_OUTPUT"; echo "push=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_NAME" = main ]; then
+            echo "tags=$IMAGE:$VERSION,$IMAGE:test" >> "$GITHUB_OUTPUT"; echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$IMAGE:$VERSION" >> "$GITHUB_OUTPUT"; echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: steps.tags.outputs.push == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.tags.outputs.push == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.bundle.outputs.version }}
