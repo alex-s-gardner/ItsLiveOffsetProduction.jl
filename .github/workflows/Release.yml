@@ -60,6 +60,10 @@ jobs:
       - uses: julia-actions/cache@v2
         with:
           cache-name: release-${{ matrix.platform }}
+      - name: Install binutils
+        # `app/link_libraries.sh` reads each library's SONAME with readelf.
+        if: runner.os == 'Linux'
+        run: command -v readelf || (sudo apt-get update -q && sudo apt-get install -y -q binutils)
       - name: Install JuliaC
         run: julia -e 'import Pkg; Pkg.activate("jcdrv"; shared = true); Pkg.add(name = "JuliaC", version = "0.3.9")'
       - name: Build

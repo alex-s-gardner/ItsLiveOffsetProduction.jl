@@ -16,6 +16,7 @@ out=$1
 arts="$out/share/julia/artifacts"
 case "$(uname -s)" in
     Linux)
+        command -v readelf > /dev/null || { echo "link_libraries.sh needs readelf (binutils)" >&2; exit 1; }
         libs() { find "$out" -type f -name '*.so*'; }
         names() { readelf -d "$1" 2>/dev/null | sed -n 's/.*(SONAME).*\[\(.*\)\]/\1/p'; }
         deps() { readelf -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'; }
