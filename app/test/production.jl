@@ -8,9 +8,12 @@ const L8B = "LC08_L1TP_021248_20220611_20220617_02_T1"
 
 @testset "the sensor and output path are optional" begin
     a = parse_args([L8A, L8B])
-    @test (a.sensor, a.reference, a.secondary, a.output, a.bucket, a.bucket_prefix) == ("", L8A, L8B, "", "", "")
-    a = parse_args(["l8", L8A, L8B, "out.nc", "--bucket", "b", "--bucket-prefix", "p/q"])
-    @test (a.sensor, a.output, a.bucket, a.bucket_prefix) == ("L8", "out.nc", "b", "p/q")
+    @test (a.sensor, a.reference, a.secondary, a.output, a.bucket, a.bucket_prefix, a.publish_bucket) ==
+          ("", L8A, L8B, "", "", "", "")
+    a = parse_args(["l8", L8A, L8B, "out.nc", "--bucket", "b", "--bucket-prefix", "p/q", "--publish-bucket", "its-live-data"])
+    @test (a.sensor, a.output, a.bucket, a.bucket_prefix, a.publish_bucket) == ("L8", "out.nc", "b", "p/q", "its-live-data")
+    # HyP3 passes a job parameter it has no value for as `None`.
+    @test parse_args([L8A, L8B, "--publish-bucket", "None"]).publish_bucket == ""
     @test parse_args([L8A, L8B, "out.nc"]).output == "out.nc"
     @test_throws "expected [<sensor>] <reference> <secondary> [<output.nc>], got 1" parse_args([L8A])
     @test_throws "got 5 positional arguments" parse_args(["L8", L8A, L8B, "a.nc", "b.nc"])

@@ -1,5 +1,5 @@
 # A netCDF-4 writer over the netCDF C library (NetCDF_jll): the calls `write_product` makes and no
-# others. Every value written has a concrete Julia type, and so a fixed netCDF type, which keeps the
+# others, and the few reads that take a written product's speed and centre back. Every value written has a concrete Julia type, and so a fixed netCDF type, which keeps the
 # writer usable from a `--trim`med program.
 #
 # Dimensions are declared and variables shaped in netCDF's own order, slowest first — `(time, y, x)`.
@@ -8,6 +8,7 @@
 
 import NetCDF_jll
 
+const NC_NOWRITE = Cint(0)
 const NC_NETCDF4 = Cint(0x1000)
 const NC_CLOBBER = Cint(0)
 const NC_GLOBAL = Cint(-1)
@@ -111,8 +112,8 @@ function nc_create(path::String, nc_string::Bool)
     return NcFile(id[], Dict{String,Cint}(), nc_string)
 end
 
-nc_close(f::NcFile) =
-    _nccheck(ccall((:nc_close, NetCDF_jll.libnetcdf), Cint, (Cint,), f.ncid), "nc_close")
+nc_close(ncid::Cint) = _nccheck(ccall((:nc_close, NetCDF_jll.libnetcdf), Cint, (Cint,), ncid), "nc_close")
+nc_close(f::NcFile) = nc_close(f.ncid)
 
 """
     with_netcdf(f, path, nc_string)
@@ -253,3 +254,76 @@ function put_var!(v::NcVar, data::Array{T}; start::Tuple{Vararg{Int}}, count::Tu
                    v.file.ncid, v.varid, s, c, data), "nc_put_vara")
     return v
 end
+
+# ---------------------------------------------------------------------------
+# Reading a product back
+# ---------------------------------------------------------------------------
+
+# `f(ncid)` with `path` open read-only, closed whether or not `f` throws.
+function _with_netcdf_read(f::F, path::String) where {F}
+    id = Ref{Cint}(0)
+    _nccheck(ccall((:nc_open, NetCDF_jll.libnetcdf), Cint, (Cstring, Cint, Ptr{Cint}), path, NC_NOWRITE, id),
+             "nc_open " * path)
+    try
+        return f(id[])
+    finally
+        nc_close(id[])
+    end
+end
+
+function _varid(ncid::Cint, name::String)
+    id = Ref{Cint}(0)
+    _nccheck(ccall((:nc_inq_varid, NetCDF_jll.libnetcdf), Cint, (Cint, Cstring, Ptr{Cint}), ncid, name, id),
+             "nc_inq_varid " * name)
+    return id[]
+end
+
+# Two-dimensional variable `name`, `(y, x)` or `(time, y, x)` with one time, read as `Int16` and indexed
+# `[x, y]`.
+function _get_grid_i16(ncid::Cint, name::String)
+    varid = _varid(ncid, name)
+    nd = Ref{Cint}(0)
+    _nccheck(ccall((:nc_inq_varndims, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Cint}), ncid, varid, nd),
+             "nc_inq_varndims " * name)
+    dimids = zeros(Cint, nd[])
+    _nccheck(ccall((:nc_inq_vardimid, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Cint}), ncid, varid, dimids),
+             "nc_inq_vardimid " * name)
+    lens = Int[]
+    for d in dimids
+        len = Ref{Csize_t}(0)
+        _nccheck(ccall((:nc_inq_dimlen, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Csize_t}), ncid, d, len),
+                 "nc_inq_dimlen")
+        push!(lens, Int(len[]))
+    end
+    (length(lens) == 2 || (length(lens) == 3 && lens[1] == 1)) || throw(ArgumentError(
+        name * " is not a grid of one time: its dimensions are " * join(string.(lens), " × ")))
+    out = Matrix{Int16}(undef, lens[end], lens[end - 1])
+    _nccheck(ccall((:nc_get_var_short, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Int16}), ncid, varid, out),
+             "nc_get_var_short " * name)
+    return out
+end
+
+# Attribute `key` of variable `name`, read as one `Float64`.
+function _get_att_f64(ncid::Cint, name::String, key::String)
+    v = Ref{Float64}(0)
+    _nccheck(ccall((:nc_get_att_double, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{Float64}),
+                   ncid, _varid(ncid, name), key, v), "nc_get_att_double " * name * ":" * key)
+    return v[]
+end
+
+"""
+    read_speed(path) -> Matrix{Int16}
+
+The speed `v` of the product at `path`, as written: m/yr, indexed `[x, y]`, `NODATA_I16` where there is
+no value.
+"""
+read_speed(path::String) = _with_netcdf_read(id -> _get_grid_i16(id, "v"), path)::Matrix{Int16}
+
+"""
+    read_center(path) -> (Float64, Float64)
+
+The latitude and longitude of the product at `path`'s centre, as `img_pair_info` records them.
+"""
+read_center(path::String) = _with_netcdf_read(path) do id
+    (_get_att_f64(id, "img_pair_info", "latitude"), _get_att_f64(id, "img_pair_info", "longitude"))
+end::Tuple{Float64,Float64}

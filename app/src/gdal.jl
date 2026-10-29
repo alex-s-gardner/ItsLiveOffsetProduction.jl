@@ -282,6 +282,33 @@ function vsi_set_tags(path::String, tags::Vector{String})
 end
 
 """
+    write_png(path, rgba)
+
+`rgba`, 8-bit RGBA indexed `[channel, x, y]`, written to `path` as a PNG through GDAL's PNG driver.
+"""
+function write_png(path::String, rgba::Array{UInt8,3})
+    size(rgba, 1) == 4 || throw(DimensionMismatch("an RGBA image has 4 channels, not " * string(size(rgba, 1))))
+    gdal_network_setup()
+    nx, ny = size(rgba, 2), size(rgba, 3)
+    mem = GDAL.gdalcreate(GDAL.gdalgetdriverbyname("MEM"), "", nx, ny, 4, GDAL.GDT_Byte, C_NULL)
+    mem == C_NULL && throw(_gdal_error("GDAL could not create a MEM dataset"))
+    try
+        # Interleaved: each pixel's four channels together, each row `4 nx` bytes, each band one byte on.
+        err = GC.@preserve rgba @ccall GDAL.libgdal.GDALDatasetRasterIO(
+            mem::GDAL.GDALDatasetH, GDAL.GF_Write::GDAL.GDALRWFlag, 0::Cint, 0::Cint, nx::Cint, ny::Cint,
+            pointer(rgba)::Ptr{Cvoid}, nx::Cint, ny::Cint, GDAL.GDT_Byte::GDAL.GDALDataType, 4::Cint,
+            C_NULL::Ptr{Cint}, 4::Cint, (4 * nx)::Cint, 1::Cint)::GDAL.CPLErr
+        err == GDAL.CE_None || throw(_gdal_error("GDAL could not write the image to a MEM dataset"))
+        out = GDAL.gdalcreatecopy(GDAL.gdalgetdriverbyname("PNG"), path, mem, 0, C_NULL, C_NULL, C_NULL)
+        out == C_NULL && throw(_gdal_error("GDAL could not write " * path))
+        GDAL.gdalclose(out)
+    finally
+        GDAL.gdalclose(mem)
+    end
+    return path
+end
+
+"""
     warp(src, flags, dest) -> Dataset
 
 `gdalwarp` of the one dataset `src` with command-line `flags`, written to `dest` — a `/vsimem/` path for an

@@ -9,7 +9,9 @@ autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [op
 
 The sensor, when omitted, is the reference's (`infer_sensor` in `src/production.jl`); the output, when
 omitted, is the product's ITS_LIVE name (`<ref>_X_<sec>_G0120V02_P<valid>.nc`) in the working directory.
-`--bucket` and `--bucket-prefix` upload the product to S3 when it is written.
+`--bucket` and `--bucket-prefix` upload the product to S3 when it is written, with its browse image and
+thumbnail (`src/browse.jl`, pixel for pixel what `hyp3-autorift` draws); `--publish-bucket` publishes the three
+to the ITS_LIVE Open Data bucket under `velocity_image_pair/<platform>/v02/<region>`.
 
 The module is `AutoriftItsLiveProduction` (`src/`). It is built with `juliac --trim=safe`, so every value
 whose type would depend on file contents is resolved by an explicit branch; `src/cli.jl`'s `USAGE` is the

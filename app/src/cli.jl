@@ -39,8 +39,14 @@ options:
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
                        the bursts both scenes hold at least half of whose footprint it covers, read out
                        of the zips
-  --bucket NAME        upload the product to this S3 bucket, with the AWS credential chain's credentials
-  --bucket-prefix P    the key prefix it is uploaded under (default none)
+  --bucket NAME        upload the product, its browse image (<product>.png) and thumbnail
+                       (<product>_thumb.png) to this S3 bucket, with the AWS credential chain's
+                       credentials
+  --bucket-prefix P    the key prefix they are uploaded under (default none)
+  --publish-bucket B   publish the three to the ITS_LIVE Open Data bucket B, under
+                       velocity_image_pair/<platform>/v02/<region>, with the credentials in
+                       PUBLISH_ACCESS_KEY_ID and PUBLISH_SECRET_ACCESS_KEY; with --bucket,
+                       publish_info.json, which records where, is uploaded there too
   --quiet              no per-stage timings on stderr
 
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
@@ -60,8 +66,8 @@ zips, which are read with the same credentials; either way into the run's scratc
     Arguments
 
 A parsed command line: the job's inputs, the output path, the run options, the heap hint, the burst
-subset polygon, and the bucket and prefix the product is uploaded to. The sensor, the output path, the
-polygon and the bucket are empty when not given: the sensor is then the reference's
+subset polygon, the bucket and prefix the product is uploaded to, and the Open Data bucket it is published
+to. The sensor, the output path, the polygon and the buckets are empty when not given: the sensor is then the reference's
 ([`infer_sensor`](@ref)), the product named as ITS_LIVE names it in the working directory, and nothing
 uploaded.
 """
@@ -75,6 +81,7 @@ struct Arguments
     subset::String
     bucket::String
     bucket_prefix::String
+    publish_bucket::String
 end
 
 """
@@ -94,11 +101,12 @@ function parse_args(args::Vector{String})
     subset = ""
     bucket = ""
     bucket_prefix = ""
+    publish_bucket = ""
     i = 1
     while i <= length(args)
         a = args[i]
         if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset",
-                 "--bucket", "--bucket-prefix")
+                 "--bucket", "--bucket-prefix", "--publish-bucket")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
             if a == "--scratch"
@@ -113,6 +121,9 @@ function parse_args(args::Vector{String})
                 bucket = v
             elseif a == "--bucket-prefix"
                 bucket_prefix = v
+            elseif a == "--publish-bucket"
+                # HyP3 passes a null job parameter as `None`.
+                publish_bucket = v == "None" ? "" : v
             elseif a == "--cache-io"
                 v in ("pread", "mmap") || throw(ArgumentError("--cache-io is pread or mmap, got " * v))
                 cache_io = v == "pread" ? :pread : :mmap
@@ -145,7 +156,7 @@ function parse_args(args::Vector{String})
     (isempty(bucket) && !isempty(bucket_prefix)) && throw(ArgumentError("--bucket-prefix needs --bucket"))
     return Arguments(sensor, positional[1], positional[2], output,
                      RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint, subset, bucket,
-                     bucket_prefix)
+                     bucket_prefix, publish_bucket)
 end
 
 # An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
@@ -196,9 +207,12 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
         with_earthdata_netrc() do
             sensor = isempty(a.sensor) ? infer_sensor(a.reference) : a.sensor
-            path = run_job(Job(sensor, a.reference, a.secondary; subset = a.subset), a.output; options = a.options)
+            job = Job(sensor, a.reference, a.secondary; subset = a.subset)
+            path = run_job(job, a.output; options = a.options)
             say("wrote " * path)
-            isempty(a.bucket) || say("uploaded " * upload_product(path, a.bucket, a.bucket_prefix))
+            for uri in deliver(path, job.platform; a.bucket, a.bucket_prefix, a.publish_bucket)
+                say("uploaded " * uri)
+            end
         end
         return Cint(0)
     catch err
