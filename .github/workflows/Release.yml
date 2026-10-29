@@ -74,7 +74,11 @@ jobs:
       - name: Start in a bare Debian
         # The bundle needs nothing of the host but the C library and loader.
         if: runner.os == 'Linux'
-        run: docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1 | head -1 | grep '^usage:'
+        run: |
+          # Pulled first: a pull's progress goes to the same stream as the usage.
+          docker pull -q debian:bookworm-slim
+          docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1 |
+            grep '^usage:'
       - name: Pack
         run: tools/release/pack.sh "$BUNDLE" "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4
