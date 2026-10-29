@@ -5,6 +5,7 @@ using Test
     # and geometry rules a run applies before it reads a scene. The end-to-end chain is
     # `tools/release/smoke.sh` and `tools/golden`, which read real granules.
     include("production.jl")
+    include("browse.jl")
     include("sceneid.jl")
     include("antimeridian.jl")
 end

@@ -46,6 +46,7 @@ include("s1orbit.jl")
 include("s1.jl")
 include("s1subset.jl")
 include("run.jl")
+include("browse.jl")
 include("production.jl")
 include("cli.jl")
 

@@ -22,8 +22,16 @@ autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [op
   the product is written to the working directory under its ITS_LIVE name,
   `<earlier>_X_<later>_G0120V02_P<valid>.nc`, `<valid>` the percentage of the searched grid with a result.
 - **`--bucket NAME`** and **`--bucket-prefix PREFIX`** upload the written product to
-  `s3://NAME/PREFIX/<file name>` as `application/x-netcdf`, tagged `file_type=product`, with the AWS
-  credential chain's credentials.
+  `s3://NAME/PREFIX/<file name>` with the AWS credential chain's credentials, together with its browse image
+  `<product>.png` and its thumbnail `<product>_thumb.png`. The browse is the speed `v` drawn in the ITS_LIVE
+  color map, and the thumbnail is at most 100 pixels a side; both are pixel for pixel what `hyp3-autorift`
+  draws. The objects are tagged with HyP3's `file_type` (`product`, `amp-browse`, `amp-thumbnail`).
+- **`--publish-bucket BUCKET`** publishes the same three files to the ITS_LIVE Open Data bucket (`its-live-data`,
+  or `its-live-data-test`) under `velocity_image_pair/<platform>/v02/<region>`, the region the product's
+  10° cell (`N80W040`). The upload uses `PUBLISH_ACCESS_KEY_ID` and `PUBLISH_SECRET_ACCESS_KEY` for that
+  bucket alone. With `--bucket` as well, `publish_info.json`, which records where the product was published,
+  is uploaded beside the product for the ITS_LIVE metadata step. `None` means no bucket, as HyP3 passes
+  an unset parameter.
 
 | sensor | reference and secondary | credentials | scratch |
 |---|---|---|---|
