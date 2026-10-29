@@ -18,7 +18,7 @@ struct RunOptions
     orbit_dir::String
 end
 
-RunOptions() = RunOptions(joinpath(tempdir(), "autorift_itslive_production"), :pread, 512, true, "", "")
+RunOptions() = RunOptions(joinpath(tempdir(), "autorift_itslive"), :pread, 512, true, "", "")
 
 say(s::String) = (write(Core.stderr, s); write(Core.stderr, "\n"); nothing)
 

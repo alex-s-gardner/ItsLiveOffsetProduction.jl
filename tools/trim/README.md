@@ -1,6 +1,6 @@
 # Trimmed-binary tooling and survey results
 
-Tools for building `autorift_itslive_production` with `juliac --trim=safe` (Julia 1.13, JuliaC 0.3.9
+Tools for building `autorift_itslive` with `juliac --trim=safe` (Julia 1.13, JuliaC 0.3.9
 from the `@jcdrv` shared environment).
 
 - `probe.sh [--project ENV] [--threads N] <program.jl|package-dir> [args...]` — builds a trimmed,
@@ -218,7 +218,7 @@ ItsLiveOffsetProduction (`trim` branch, uncommitted):
 
 ## Phase 4: the optical binary (done)
 
-`app/build.sh <dir>` builds `autorift_itslive_production` with `--trim=safe`: 0 verifier errors. The
+`app/build.sh <dir>` builds `autorift_itslive` with `--trim=safe`: 0 verifier errors. The
 gate ran each of the 12 optical golden cases through the JIT app (as it was before the trim rewrite) and
 through the binary, as separate processes, each starting from a copy of one frozen FFTW wisdom file
 (populated by one earlier run of every case), with `JULIA_NUM_THREADS=6,1` and the build depot hidden.
@@ -526,7 +526,7 @@ Every timing above was taken from a binary that had already been launched.
 ## Phase 7: release builds (macOS done; Linux built, not validated)
 
 **Shipped FFTW wisdom.** `app/wisdom/` holds one file per CPU model; the bundle carries it under
-`share/autorift_itslive_production/fftw-wisdom`. An executable started without `AUTORIFT_FFTW_WISDOM_DIR`
+`share/autorift_itslive/fftw-wisdom`. An executable started without `AUTORIFT_FFTW_WISDOM_DIR`
 reruns itself with the variable pointing at a temporary copy, deleted when the run ends (`ensure_environment`
 in `src/cli.jl`). The macOS file is the union of every wisdom file the gates measured (46 files). Two runs of
 the final macOS bundle on LT05 060018 started that way gave identical data, equal to the Phase 4 product.

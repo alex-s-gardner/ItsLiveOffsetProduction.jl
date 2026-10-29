@@ -23,7 +23,7 @@ The reference implementation (`hyp3-autorift`'s `testautoRIFT.py`, `netcdf_outpu
 does this across three files and two writes — an uncropped file, then a full reopen that crops, pads to
 a 512-pixel/120 m-aligned grid, and adds a `time` dimension. This does all of it in one pass.
 
-## The `autorift_itslive_production` executable
+## The `autorift_itslive` executable
 
 `app/` builds this package and the rest of the chain (scene readers, geometry, AutoRIFT.jl) into one
 self-contained executable that runs an image pair from its sources to the ITS_LIVE product netCDF.
@@ -32,10 +32,10 @@ examples, and how to get a release. [`app/README.md`](app/README.md) covers buil
 
 ```bash
 # The product is written to the working directory under its ITS_LIVE name
-autorift_itslive_production LC08_L1TP_021248_20210507_20210517_02_T1 LC08_L1TP_021248_20220611_20220617_02_T1
+autorift_itslive LC08_L1TP_021248_20210507_20210517_02_T1 LC08_L1TP_021248_20220611_20220617_02_T1
 
 # A burst pair, its bursts listed as HyP3 lists them, uploaded and published
-autorift_itslive_production \
+autorift_itslive \
   --reference S1_342239_IW3_20211202T161351_VV_3876-BURST S1_342240_IW3_20211202T161354_VV_3876-BURST \
   --secondary S1_342239_IW3_20211214T161351_VV_91C4-BURST S1_342240_IW3_20211214T161353_VV_91C4-BURST \
   --bucket <hyp3-bucket> --bucket-prefix <job-id> --publish-bucket its-live-data

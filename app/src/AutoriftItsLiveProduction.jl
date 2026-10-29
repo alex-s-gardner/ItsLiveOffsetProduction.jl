@@ -2,7 +2,7 @@
     AutoriftItsLiveProduction
 
 ITS_LIVE offset production from two scenes: the sensor's tuned end-to-end workflow, from reading the scenes
-at their source to the netCDF product, behind the command-line entry point `autorift_itslive_production`
+at their source to the netCDF product, behind the command-line entry point `autorift_itslive`
 (see [`julia_main`](@ref)). Built with `juliac --trim=safe` into a self-contained executable; every value
 whose type would depend on file contents is resolved by an explicit branch.
 """

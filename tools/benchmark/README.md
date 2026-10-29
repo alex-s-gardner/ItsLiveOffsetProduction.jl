@@ -2,7 +2,7 @@
 
 `pairs/<group>.tsv` holds 1000 image pairs per benchmark group, one per line in the column order the EC2
 runner reads: sensor code, product name, reference scene, secondary scene, reference input, secondary
-input. The inputs are what `autorift_itslive_production` takes:
+input. The inputs are what `autorift_itslive` takes:
 
 | Group | Sensor code | Inputs | Source of the pairs |
 |---|---|---|---|
