@@ -1,10 +1,10 @@
-# autorift_itslive_production
+# autorift_itslive
 
 One self-contained executable that runs the ITS_LIVE offset-production chain on a pair of scenes and writes
 the product netCDF:
 
 ```
-autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
+autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [options]
 ```
 
 The sensor, when omitted, is the reference's (`infer_sensor` in `src/production.jl`); the output, when
@@ -79,7 +79,7 @@ the executable runs itself again when either is unset:
 
 - with `JULIA_NUM_THREADS=auto`;
 - with `AUTORIFT_FFTW_WISDOM_DIR` pointing at a temporary copy of the wisdom the bundle ships
-  (`share/autorift_itslive_production/fftw-wisdom`, from `app/wisdom/`), deleted when the run ends.
+  (`share/autorift_itslive/fftw-wisdom`, from `app/wisdom/`), deleted when the run ends.
 
 Every run on a CPU model the bundle has wisdom for therefore plans its transforms alike: products are
 reproducible run to run, and only bit-identical between runs that start from the same wisdom. Wisdom is

@@ -1,6 +1,6 @@
 name: Release
 
-# The `autorift_itslive_production` bundles, built with `juliac --trim=safe` on each platform's own runner,
+# The `autorift_itslive` bundles, built with `juliac --trim=safe` on each platform's own runner,
 # and the Linux container image made from them.
 #
 #   - a `v*` tag: build, attach the bundles and `manifest.json` to that tag's GitHub Release, and push the
@@ -72,7 +72,7 @@ jobs:
         # pipefail: the build's own status, not tee's.
         shell: bash -eo pipefail {0}
         run: |
-          bundle=$RUNNER_TEMP/autorift_itslive_production-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          bundle=$RUNNER_TEMP/autorift_itslive-${{ steps.version.outputs.version }}-${{ matrix.platform }}
           app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
           # `juliac` reports verifier errors and still writes an executable for some of them.
           if grep -q 'Verifier error' "$RUNNER_TEMP/build.log"; then echo "::error::the trimmed build has verifier errors"; exit 1; fi
@@ -83,11 +83,11 @@ jobs:
         run: |
           # Pulled first: a pull's progress goes to the same stream as the usage.
           docker pull -q debian:bookworm-slim
-          out=$(docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1) || true
+          out=$(docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive --help 2>&1) || true
           if ! grep -q '^usage:' <<< "$out"; then
             echo "::error::the bundle does not start in a bare debian:bookworm-slim"
             printf '%s\n' "$out" | head -40
-            docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim ldd /b/bin/autorift_itslive_production || true
+            docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim ldd /b/bin/autorift_itslive || true
             exit 1
           fi
       - name: Pack
@@ -117,15 +117,15 @@ jobs:
           cd dist
           platforms='{}'
           for f in *.tar.zst; do
-            p=${f#autorift_itslive_production-"$VERSION"-}; p=${p%.tar.zst}
+            p=${f#autorift_itslive-"$VERSION"-}; p=${p%.tar.zst}
             platforms=$(jq --arg p "$p" --arg f "$f" --argjson s "$(wc -c < "$f")" --arg h "$(cut -d' ' -f1 "$f.sha256")" \
               '. + {($p): {file: $f, size_bytes: $s, sha256: $h}}' <<< "$platforms")
           done
           jq -n --arg v "$VERSION" --arg c "$GITHUB_SHA" --arg r "$GITHUB_REPOSITORY" --arg t "$(date -u +%Y-%m-%dT%H:%MZ)" \
             --argjson p "$platforms" \
-            '{name: "autorift_itslive_production", version: $v, commit: $c, repository: $r, built_utc: $t,
+            '{name: "autorift_itslive", version: $v, commit: $c, repository: $r, built_utc: $t,
               julia: "1.13.0", juliac: "0.3.9, --trim=safe", verifier_errors: 0,
-              archive: "tar.zst; extract, then run bin/autorift_itslive_production; README.md in the bundle describes it",
+              archive: "tar.zst; extract, then run bin/autorift_itslive; README.md in the bundle describes it",
               platforms: $p}' > manifest.json
           cat manifest.json
       - name: Attach to the release
@@ -156,9 +156,9 @@ jobs:
         run: |
           for pair in amd64:linux-x86_64 arm64:linux-aarch64; do
             arch=${pair%%:*}; platform=${pair#*:}
-            mkdir -p "$arch/autorift_itslive_production"
-            zstd -dc "dist/autorift_itslive_production-$VERSION-$platform.tar.zst" |
-              tar -xf - -C "$arch/autorift_itslive_production" --strip-components=1
+            mkdir -p "$arch/autorift_itslive"
+            zstd -dc "dist/autorift_itslive-$VERSION-$platform.tar.zst" |
+              tar -xf - -C "$arch/autorift_itslive" --strip-components=1
           done
       - name: Tags
         id: tags

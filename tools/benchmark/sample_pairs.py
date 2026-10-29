@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 A uniform random sample of ITS_LIVE v02 image pairs per benchmark group, from the catalogs in
-s3://its-live-data/catalog_geojson, with the inputs autorift_itslive_production takes for each.
+s3://its-live-data/catalog_geojson, with the inputs autorift_itslive takes for each.
 
 Every pair gets a key, the first 8 bytes of sha256(seed + filename); the K pairs with the smallest keys in
 a group are a uniform sample of it without replacement, the same on every run, and a chunk's local K

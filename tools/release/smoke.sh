@@ -8,7 +8,7 @@
 # setup path, which is where a changed signature surfaces; `done` runs the pairs to completion (about 10
 # minutes, and 25 more for NL2).
 #
-#     tools/release/smoke.sh ~/release/autorift_itslive_production-<version>-<platform>
+#     tools/release/smoke.sh ~/release/autorift_itslive-<version>-<platform>
 #     tools/release/smoke.sh <bundle> imagery NL1 NL2
 #
 # The inputs are read as a normal run reads them, so the environment must supply what they need: AWS
@@ -17,7 +17,7 @@
 # must be on disk, not tmpfs). Exits nonzero if any group fails.
 set -u
 bundle=$1; stage=${2:-geometry}; shift $(( $# > 1 ? 2 : 1 )); groups=("$@")
-bin=$bundle/bin/autorift_itslive_production
+bin=$bundle/bin/autorift_itslive
 [ -x "$bin" ] || { echo "no executable at $bin"; exit 2; }
 case $stage in geometry|imagery) pat="^$stage " ;; done) pat="^wrote " ;; *) echo "STAGE is geometry, imagery or done"; exit 2 ;; esac
 here=$(cd "$(dirname "$0")" && pwd)

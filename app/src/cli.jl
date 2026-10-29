@@ -1,8 +1,8 @@
 # The command line.
 
 const USAGE = """
-usage: autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
-       autorift_itslive_production [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
+usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [options]
+       autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 
   sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
                a burst pair (S1BURST), with --subset.
@@ -31,7 +31,7 @@ usage: autorift_itslive_production [<sensor>] <reference> <secondary> [<output.n
 
 options:
   --scratch DIR        local scratch for the run's tile caches and a remote Sentinel-2 band (default:
-                       \$TMPDIR/autorift_itslive_production);
+                       \$TMPDIR/autorift_itslive);
                        must be on disk, not a RAM-backed tmpfs such as /tmp on Amazon Linux
   --cache-io MODE      pread (default) or mmap, how the scratch tile caches are accessed
   --filter-tile N      side of the filtered-tile cache's tiles in pixels (default 512)
@@ -57,7 +57,7 @@ options:
   --quiet              no per-stage timings on stderr
 
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
-copy of the wisdom the bundle ships for this CPU (share/autorift_itslive_production/fftw-wisdom), so runs
+copy of the wisdom the bundle ships for this CPU (share/autorift_itslive/fftw-wisdom), so runs
 plan their transforms alike, and discards what it measures.
 
 Landsat is read from s3://usgs-landsat, which is requester-pays: the AWS credential chain (environment,
@@ -103,7 +103,7 @@ The command line. Throws an `ArgumentError` naming the problem for anything it c
 """
 function parse_args(args::Vector{String})
     positional = String[]
-    scratch = joinpath(tempdir(), "autorift_itslive_production")
+    scratch = joinpath(tempdir(), "autorift_itslive")
     cache_io = :pread
     filter_tile = 512
     hint = HEAP_HINT_GIB
@@ -267,9 +267,9 @@ end
 # Set to the per-run wisdom directory `ensure_environment` made, which the run deletes when it ends.
 const TEMP_WISDOM_VAR = "AUTORIFT_ITSLIVE_TEMP_WISDOM"
 
-# The FFTW wisdom the bundle ships: `share/autorift_itslive_production/fftw-wisdom` beside `bin/`, one file
+# The FFTW wisdom the bundle ships: `share/autorift_itslive/fftw-wisdom` beside `bin/`, one file
 # per CPU model, named as `AutoRIFT.fftw_wisdom_path` names it.
-bundled_wisdom_dir(exe::String) = joinpath(dirname(dirname(exe)), "share", "autorift_itslive_production", "fftw-wisdom")
+bundled_wisdom_dir(exe::String) = joinpath(dirname(dirname(exe)), "share", "autorift_itslive", "fftw-wisdom")
 
 """
     ensure_environment(args)

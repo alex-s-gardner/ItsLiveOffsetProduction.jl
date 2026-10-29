@@ -1,4 +1,4 @@
-# autorift_itslive_production
+# autorift_itslive
 
 A self-contained executable that runs the ITS_LIVE offset-production chain on a pair of scenes and writes the
 product netCDF. It needs no Julia installation. This file describes how to run it, what each sensor takes, and
@@ -7,8 +7,8 @@ how a release is laid out; it ships at the root of every bundle and beside the r
 ## What you give it
 
 ```
-autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
-autorift_itslive_production [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
+autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [options]
+autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 ```
 
 - **`<sensor>`** names the kind of pair, from the table below. Without it the sensor is the reference's: its
@@ -85,8 +85,8 @@ Credentials are read from the environment:
 Each is a pair that has run. `N` is the unpacked bundle directory (see "Getting a release").
 
 ```bash
-N=autorift_itslive_production-<version>-<platform>
-X=$N/bin/autorift_itslive_production
+N=autorift_itslive-<version>-<platform>
+X=$N/bin/autorift_itslive
 ```
 
 **Landsat** (L4 and L9 take the same form, with `L4` and `LT04` items, or `L9` and `LC09` items):
@@ -201,7 +201,7 @@ FFTW plans its transforms by measuring, and keeps what it learned as "wisdom". A
 same wisdom plans every transform the same way, so its products are bit-identical to the last run's; a run that
 has to measure may plan some transforms differently, and about 0.01 to 0.1% of the pixels then differ. The
 executable therefore starts every run from the wisdom the bundle carries, in
-`share/autorift_itslive_production/fftw-wisdom/`.
+`share/autorift_itslive/fftw-wisdom/`.
 
 A file is named `<cpu>-fftw<version>.wisdom`, where `<cpu>` is the CPU model the OS reports (on Graviton, the
 core name) and the version is FFTW's. A run reads only the file with its own CPU's name. It works on a
@@ -224,7 +224,7 @@ plan it needs: it is slower, and its products are only bit-reproducible against 
 the same wisdom, not against runs on another CPU. To give such a CPU a file:
 
 1. On an instance of that type, copy the bundle's wisdom directory to a persistent one
-   (`cp -r $N/share/autorift_itslive_production/fftw-wisdom ~/wisdom_grow`; make an empty one if you like) and
+   (`cp -r $N/share/autorift_itslive/fftw-wisdom ~/wisdom_grow`; make an empty one if you like) and
    run representative pairs, one after another, with `AUTORIFT_FFTW_WISDOM_DIR=~/wisdom_grow` set. A run with
    that variable set reads the directory and adds what it measures to it.
 2. Copy the file written there (named for the CPU) into the bundle's `fftw-wisdom` directory on every instance
@@ -257,11 +257,13 @@ Releases also live under `s3://its-live-data/production_code/image_pair/`:
 latest.json                                  the current version: {"version": ..., "manifest": ...}
 README.md                                    this file
 versions/<version>/
-    autorift_itslive_production-<version>-<platform>.tar.zst         one bundle per platform
-    autorift_itslive_production-<version>-<platform>.tar.zst.sha256
+    autorift_itslive-<version>-<platform>.tar.zst         one bundle per platform
+    autorift_itslive-<version>-<platform>.tar.zst.sha256
     manifest.json                            commit, build date, sizes, checksums, notes
 ```
 
+- Versions up to `v0.1.0-29` name the bundle and its executable `autorift_itslive_production`; later ones
+  `autorift_itslive`.
 - `<version>` is `git describe` of the commit the bundles were built from (for example `v0.1.0-14-g9f47bbd`:
   14 commits after the `v0.1.0` tag, at commit `9f47bbd`). A version is written once and never overwritten;
   `latest.json` is the only object that changes.
@@ -278,25 +280,25 @@ Fetch, verify and unpack the current one:
 S3=s3://its-live-data/production_code/image_pair
 V=$(aws s3 cp $S3/latest.json - | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
 P=linux-aarch64                       # or linux-x86_64, macos-arm64
-N=autorift_itslive_production-$V-$P
+N=autorift_itslive-$V-$P
 aws s3 cp $S3/versions/$V/$N.tar.zst . && aws s3 cp $S3/versions/$V/$N.tar.zst.sha256 .
 sha256sum -c $N.tar.zst.sha256        # macOS: shasum -a 256 -c
 zstd -dc $N.tar.zst | tar -xf -
-$N/bin/autorift_itslive_production --help
+$N/bin/autorift_itslive --help
 ```
 
 ## What is in a bundle
 
 ```
-autorift_itslive_production-<version>-<platform>/
-    bin/autorift_itslive_production     the executable
+autorift_itslive-<version>-<platform>/
+    bin/autorift_itslive     the executable
     lib/                                the runtime and its libraries (GDAL, PROJ, HDF5, NetCDF, FFTW, ...)
     share/                              data the libraries read (GDAL and PROJ data, the CA bundle, ...)
-    share/autorift_itslive_production/fftw-wisdom/    FFTW wisdom, one file per CPU model (above)
+    share/autorift_itslive/fftw-wisdom/    FFTW wisdom, one file per CPU model (above)
     README.md                           this file
 ```
 
-The directory is relocatable as a whole: move or copy it anywhere and run `bin/autorift_itslive_production`.
+The directory is relocatable as a whole: move or copy it anywhere and run `bin/autorift_itslive`.
 On Linux it needs only the host's C library (glibc); every other library comes from the bundle.
 
 ## Checking a bundle
