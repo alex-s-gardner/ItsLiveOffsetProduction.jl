@@ -39,7 +39,7 @@ JULIA_CPU_TARGET="$cpu_target" "${jl[@]}" --project=@jcdrv -m JuliaC --experimen
 find "$out/share/julia/artifacts" -mindepth 2 -maxdepth 2 -type d \( -name include -o -name cmake -o -name bin \) \
     -exec rm -rf {} +
 find "$out/share/julia/artifacts" -type f -name '*.a' -delete
-bash ${TRACE_LINK:+-x} "$here/link_libraries.sh" "$out"
+"$here/link_libraries.sh" "$out"
 # The FFTW wisdom each run starts from (`ensure_environment` in src/cli.jl), one file per CPU model.
 mkdir -p "$out/share/autorift_itslive_production/fftw-wisdom"
 cp "$here"/wisdom/*.wisdom "$out/share/autorift_itslive_production/fftw-wisdom/"
