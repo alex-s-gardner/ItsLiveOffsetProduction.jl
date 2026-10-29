@@ -2,6 +2,7 @@
 
 const USAGE = """
 usage: autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
+       autorift_itslive_production [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 
   sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
                a burst pair (S1BURST), with --subset.
@@ -20,6 +21,11 @@ usage: autorift_itslive_production [<sensor>] <reference> <secondary> [<output.n
                (S1_342239_IW3_20211202T161351_VV_3876-BURST), comma-separated; each is resolved to
                the input above, NISAR granules and bursts through ASF's catalog (CMR), a burst to
                itself in its SLC's zip.
+  -r, --reference SCENE..., -s, --secondary SCENE...
+               the two scenes as lists, each item a separate argument (or several in one,
+               separated by spaces or commas), as HyP3 passes a burst pair's bursts; in place of
+               the positional reference and secondary. A list runs to the next option, so the
+               output path, if given, comes before it
   output.nc    where the ITS_LIVE product is written; by default its ITS_LIVE name,
                <ref>_X_<sec>_G0120V02_P<valid>.nc, in the working directory
 
@@ -84,6 +90,11 @@ struct Arguments
     publish_bucket::String
 end
 
+# The scenes one value of a `--reference` or `--secondary` list names: separated by white space or commas,
+# with `None`, which HyP3 passes for an empty list, naming none.
+scene_list_items(v::String) =
+    String[String(x) for x in split(v, (' ', '\t', '\n', ','); keepempty = false) if x != "None"]
+
 """
     parse_args(args) -> Arguments
 
@@ -102,10 +113,20 @@ function parse_args(args::Vector{String})
     bucket = ""
     bucket_prefix = ""
     publish_bucket = ""
+    lists = (reference = String[], secondary = String[])
     i = 1
     while i <= length(args)
         a = args[i]
-        if a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset",
+        if a in ("-r", "--reference", "-s", "--secondary")
+            # Every value up to the next option: the scenes, as HyP3 passes a list.
+            list = a in ("-r", "--reference") ? lists.reference : lists.secondary
+            i += 1
+            while i <= length(args) && !startswith(args[i], "-")
+                append!(list, scene_list_items(args[i]))
+                i += 1
+            end
+            isempty(list) && throw(ArgumentError(a * " needs at least one scene"))
+        elseif a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset",
                  "--bucket", "--bucket-prefix", "--publish-bucket")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
@@ -149,12 +170,24 @@ function parse_args(args::Vector{String})
     end
     # The sensor, when given, comes first; no scene input is a sensor code.
     sensor = !isempty(positional) && is_sensor_code(positional[1]) ? uppercase(popfirst!(positional)) : ""
-    length(positional) in (2, 3) || throw(ArgumentError(
-        "expected [<sensor>] <reference> <secondary> [<output.nc>], got " * string(length(positional) +
-        !isempty(sensor)) * " positional arguments"))
-    output = length(positional) == 3 ? positional[3] : ""
+    flagged = !isempty(lists.reference) || !isempty(lists.secondary)
+    if flagged
+        (isempty(lists.reference) || isempty(lists.secondary)) && throw(ArgumentError(
+            "--reference and --secondary are given together, but only one of them is"))
+        length(positional) <= 1 || throw(ArgumentError(
+            "with --reference and --secondary, expected [<sensor>] [<output.nc>], got " *
+            string(length(positional) + !isempty(sensor)) * " positional arguments"))
+        reference, secondary = join(lists.reference, ","), join(lists.secondary, ",")
+        output = isempty(positional) ? "" : positional[1]
+    else
+        length(positional) in (2, 3) || throw(ArgumentError(
+            "expected [<sensor>] <reference> <secondary> [<output.nc>], got " * string(length(positional) +
+            !isempty(sensor)) * " positional arguments"))
+        reference, secondary = positional[1], positional[2]
+        output = length(positional) == 3 ? positional[3] : ""
+    end
     (isempty(bucket) && !isempty(bucket_prefix)) && throw(ArgumentError("--bucket-prefix needs --bucket"))
-    return Arguments(sensor, positional[1], positional[2], output,
+    return Arguments(sensor, reference, secondary, output,
                      RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir), hint, subset, bucket,
                      bucket_prefix, publish_bucket)
 end
