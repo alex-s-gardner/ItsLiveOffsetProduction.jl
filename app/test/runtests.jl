@@ -6,6 +6,7 @@ using Test
     # `tools/release/smoke.sh` and `tools/golden`, which read real granules.
     include("production.jl")
     include("browse.jl")
+    include("catalog.jl")
     include("sceneid.jl")
     include("antimeridian.jl")
 end

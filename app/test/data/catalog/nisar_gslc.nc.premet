@@ -1,0 +1,14 @@
+FileName=NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093
+VersionID_local=002
+Begin_date=2025-10-28
+End_date=2025-12-15
+Begin_time=23:52:01.000
+End_time=23:52:03.000
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=NISAR
+AssociatedInstrumentShortName=L-SAR
+AssociatedSensorShortName=L-SAR
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=NISAR
+AssociatedInstrumentShortName=L-SAR
+AssociatedSensorShortName=L-SAR
