@@ -1,0 +1,14 @@
+FileName=S1A_IW_SLC__1SSH_20150828T162412_20150828T162431_007465_00A4AF_DC3E_X_S1A_IW_SLC__1SSH_20150909T162413_20150909T162443_007640_00A97D_922B_G0120V02_P086
+VersionID_local=002
+Begin_date=2015-08-28
+End_date=2015-09-09
+Begin_time=16:24:14.425
+End_time=16:24:14.866
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=SENTINEL-1
+AssociatedInstrumentShortName=Sentinel-1A
+AssociatedSensorShortName=Sentinel-1A
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=SENTINEL-1
+AssociatedInstrumentShortName=Sentinel-1A
+AssociatedSensorShortName=Sentinel-1A

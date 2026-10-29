@@ -9,6 +9,7 @@
 import NetCDF_jll
 
 const NC_NOWRITE = Cint(0)
+const NC_ENOTATT = Cint(-43)
 const NC_NETCDF4 = Cint(0x1000)
 const NC_CLOBBER = Cint(0)
 const NC_GLOBAL = Cint(-1)
@@ -278,10 +279,8 @@ function _varid(ncid::Cint, name::String)
     return id[]
 end
 
-# Two-dimensional variable `name`, `(y, x)` or `(time, y, x)` with one time, read as `Int16` and indexed
-# `[x, y]`.
-function _get_grid_i16(ncid::Cint, name::String)
-    varid = _varid(ncid, name)
+# The lengths of variable `varid`'s dimensions, in netCDF order.
+function _dim_lengths(ncid::Cint, varid::Cint, name::String)
     nd = Ref{Cint}(0)
     _nccheck(ccall((:nc_inq_varndims, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Cint}), ncid, varid, nd),
              "nc_inq_varndims " * name)
@@ -295,6 +294,14 @@ function _get_grid_i16(ncid::Cint, name::String)
                  "nc_inq_dimlen")
         push!(lens, Int(len[]))
     end
+    return lens
+end
+
+# Two-dimensional variable `name`, `(y, x)` or `(time, y, x)` with one time, read as `Int16` and indexed
+# `[x, y]`.
+function _get_grid_i16(ncid::Cint, name::String)
+    varid = _varid(ncid, name)
+    lens = _dim_lengths(ncid, varid, name)
     (length(lens) == 2 || (length(lens) == 3 && lens[1] == 1)) || throw(ArgumentError(
         name * " is not a grid of one time: its dimensions are " * join(string.(lens), " × ")))
     out = Matrix{Int16}(undef, lens[end], lens[end - 1])
@@ -309,6 +316,94 @@ function _get_att_f64(ncid::Cint, name::String, key::String)
     _nccheck(ccall((:nc_get_att_double, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{Float64}),
                    ncid, _varid(ncid, name), key, v), "nc_get_att_double " * name * ":" * key)
     return v[]
+end
+
+# Attribute `key` of variable `name` (`""` for a global one) as a `String`, written as `NC_STRING` or
+# `NC_CHAR`; `nothing` when there is no such attribute.
+function _get_att_string(ncid::Cint, name::String, key::String)
+    varid = isempty(name) ? NC_GLOBAL : _varid(ncid, name)
+    type, len = Ref{Cint}(0), Ref{Csize_t}(0)
+    st = ccall((:nc_inq_att, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{Cint}, Ptr{Csize_t}),
+               ncid, varid, key, type, len)
+    st == NC_ENOTATT && return nothing
+    _nccheck(st, "nc_inq_att " * name * ":" * key)
+    if type[] == NC_STRING
+        len[] == 1 || throw(ArgumentError(name * ":" * key * " holds " * string(len[]) * " strings, not one"))
+        p = Ref{Cstring}(C_NULL)
+        _nccheck(ccall((:nc_get_att_string, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{Cstring}),
+                       ncid, varid, key, p), "nc_get_att_string " * name * ":" * key)
+        v = unsafe_string(p[])
+        ccall((:nc_free_string, NetCDF_jll.libnetcdf), Cint, (Csize_t, Ptr{Cstring}), 1, p)
+        return v
+    end
+    type[] == NC_CHAR || throw(ArgumentError(name * ":" * key * " is not text"))
+    buf = Vector{UInt8}(undef, len[])
+    _nccheck(ccall((:nc_get_att_text, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{UInt8}),
+                   ncid, varid, key, buf), "nc_get_att_text " * name * ":" * key)
+    return String(buf)
+end
+
+# A one-dimensional `Float64` variable whole.
+function _get_vector_f64(ncid::Cint, name::String)
+    varid = _varid(ncid, name)
+    lens = _dim_lengths(ncid, varid, name)
+    length(lens) == 1 || throw(ArgumentError(name * " is not one-dimensional"))
+    out = Vector{Float64}(undef, lens[1])
+    _nccheck(ccall((:nc_get_var_double, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Ptr{Float64}), ncid, varid, out),
+             "nc_get_var_double " * name)
+    return out
+end
+
+"""
+    ProductSummary
+
+What a written product says of itself that its catalog records are made from: its grid (`x`, `y`, the
+mapping's `GeoTransform` and EPSG code), and its `img_pair_info` and global attributes, as written —
+`frame_img1`/`frame_img2` and `flight_direction_img1` empty when the product has none.
+"""
+struct ProductSummary
+    x::Vector{Float64}
+    y::Vector{Float64}
+    geotransform::String
+    epsg::Int
+    id_img1::String
+    id_img2::String
+    acquisition_date_img1::String
+    acquisition_date_img2::String
+    date_center::String
+    date_dt::Float64
+    roi_valid_percentage::Float64
+    flight_direction_img1::String
+    frame_img1::String
+    frame_img2::String
+    date_created::String
+    date_updated::String
+end
+
+"""
+    read_summary(path) -> ProductSummary
+
+The [`ProductSummary`](@ref) of the product at `path`.
+"""
+function read_summary(path::String)
+    return _with_netcdf_read(path) do id
+        att(name, key) = something(_get_att_string(id, name, key), "")
+        function need(name, key)
+            v = _get_att_string(id, name, key)
+            v === nothing && throw(ArgumentError(path * " has no " * name * ":" * key))
+            return v
+        end
+        epsg = Ref{Int64}(0)
+        _nccheck(ccall((:nc_get_att_longlong, NetCDF_jll.libnetcdf), Cint, (Cint, Cint, Cstring, Ptr{Int64}),
+                       id, _varid(id, "mapping"), "spatial_epsg", epsg), "nc_get_att_longlong mapping:spatial_epsg")
+        ProductSummary(_get_vector_f64(id, "x"), _get_vector_f64(id, "y"), need("mapping", "GeoTransform"),
+                       Int(epsg[]), need("img_pair_info", "id_img1"), need("img_pair_info", "id_img2"),
+                       need("img_pair_info", "acquisition_date_img1"), need("img_pair_info", "acquisition_date_img2"),
+                       need("img_pair_info", "date_center"), _get_att_f64(id, "img_pair_info", "date_dt"),
+                       _get_att_f64(id, "img_pair_info", "roi_valid_percentage"),
+                       att("img_pair_info", "flight_direction_img1"), att("img_pair_info", "frame_img1"),
+                       att("img_pair_info", "frame_img2"), need("", "date_created"), att("", "date_updated"))
+    end::ProductSummary
 end
 
 """

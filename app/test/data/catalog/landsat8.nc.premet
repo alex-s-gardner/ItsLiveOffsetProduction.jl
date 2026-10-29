@@ -1,0 +1,14 @@
+FileName=LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078
+VersionID_local=002
+Begin_date=2020-07-03
+End_date=2020-08-20
+Begin_time=15:00:24.531
+End_time=15:00:40.287
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=LANDSAT-8
+AssociatedInstrumentShortName=OLI
+AssociatedSensorShortName=OLI
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=LANDSAT-8
+AssociatedInstrumentShortName=OLI
+AssociatedSensorShortName=OLI

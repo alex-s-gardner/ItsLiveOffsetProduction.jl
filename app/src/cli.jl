@@ -45,11 +45,12 @@ options:
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
                        the bursts both scenes hold at least half of whose footprint it covers, read out
                        of the zips
-  --bucket NAME        upload the product, its browse image (<product>.png) and thumbnail
-                       (<product>_thumb.png) to this S3 bucket, with the AWS credential chain's
-                       credentials
+  --bucket NAME        upload the product, its browse image (<product>.png), its thumbnail
+                       (<product>_thumb.png) and its catalog records (<product>.stac.json,
+                       <product>.nc.premet, <product>.nc.spatial) to this S3 bucket, with the AWS
+                       credential chain's credentials
   --bucket-prefix P    the key prefix they are uploaded under (default none)
-  --publish-bucket B   publish the three to the ITS_LIVE Open Data bucket B, under
+  --publish-bucket B   publish the six to the ITS_LIVE Open Data bucket B, under
                        velocity_image_pair/<platform>/v02/<region>, with the credentials in
                        PUBLISH_ACCESS_KEY_ID and PUBLISH_SECRET_ACCESS_KEY; with --bucket,
                        publish_info.json, which records where, is uploaded there too

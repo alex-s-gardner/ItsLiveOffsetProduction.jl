@@ -29,8 +29,11 @@ autorift_itslive_production [<sensor>] [<output.nc>] -r <scene>... -s <scene>...
   `s3://NAME/PREFIX/<file name>` with the AWS credential chain's credentials, together with its browse image
   `<product>.png` and its thumbnail `<product>_thumb.png`. The browse is the speed `v` drawn in the ITS_LIVE
   color map, and the thumbnail is at most 100 pixels a side; both are pixel for pixel what `hyp3-autorift`
-  draws. The objects are tagged with HyP3's `file_type` (`product`, `amp-browse`, `amp-thumbnail`).
-- **`--publish-bucket BUCKET`** publishes the same three files to the ITS_LIVE Open Data bucket (`its-live-data`,
+  draws. With them go the product's catalog records: its STAC item (`<product>.stac.json`) and NSIDC's
+  `<product>.nc.premet` and `<product>.nc.spatial`. These are what the ITS_LIVE metadata step
+  (`itslive-metadata`) writes of the product, naming it where it was published, or else where it was
+  uploaded. The objects are tagged with HyP3's `file_type` (`product`, `amp-browse`, `amp-thumbnail`).
+- **`--publish-bucket BUCKET`** publishes the same six files to the ITS_LIVE Open Data bucket (`its-live-data`,
   or `its-live-data-test`) under `velocity_image_pair/<platform>/v02/<region>`, the region the product's
   10° cell (`N80W040`). The upload uses `PUBLISH_ACCESS_KEY_ID` and `PUBLISH_SECRET_ACCESS_KEY` for that
   bucket alone. With `--bucket` as well, `publish_info.json`, which records where the product was published,

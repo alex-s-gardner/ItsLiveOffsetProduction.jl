@@ -1,0 +1,14 @@
+FileName=S2A_MSIL1C_20200626T204021_N0209_R014_T07VEG_20200626T235742_X_S2B_MSIL1C_20200701T204019_N0209_R014_T07VEG_20200701T223901_G0120V02_P085
+VersionID_local=002
+Begin_date=2020-06-26
+End_date=2020-07-01
+Begin_time=20:40:21.000
+End_time=20:40:19.000
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=SENTINEL-2
+AssociatedInstrumentShortName=Sentinel-2A
+AssociatedSensorShortName=Sentinel-2A
+Container=AssociatedPlatformInstrumentSensor
+AssociatedPlatformShortName=SENTINEL-2
+AssociatedInstrumentShortName=Sentinel-2B
+AssociatedSensorShortName=Sentinel-2B

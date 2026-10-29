@@ -1,0 +1,143 @@
+{
+  "type": "Feature",
+  "stac_version": "1.1.0",
+  "stac_extensions": [
+    "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+    "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json",
+    "https://stac-extensions.github.io/version/v1.2.0/schema.json",
+    "https://stac-extensions.github.io/sat/v1.1.0/schema.json"
+  ],
+  "id": "NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -52.306,
+          67.9641
+        ],
+        [
+          -50.4925,
+          68.0404
+        ],
+        [
+          -48.668,
+          68.095
+        ],
+        [
+          -46.836,
+          68.1279
+        ],
+        [
+          -45.0002,
+          68.1389
+        ],
+        [
+          -45.0002,
+          68.824
+        ],
+        [
+          -45.0002,
+          69.5107
+        ],
+        [
+          -45.0002,
+          70.1988
+        ],
+        [
+          -45.0002,
+          70.8883
+        ],
+        [
+          -47.1057,
+          70.8756
+        ],
+        [
+          -49.2056,
+          70.8376
+        ],
+        [
+          -51.2942,
+          70.7745
+        ],
+        [
+          -53.3661,
+          70.6865
+        ],
+        [
+          -53.0734,
+          70.0044
+        ],
+        [
+          -52.8004,
+          69.3233
+        ],
+        [
+          -52.5451,
+          68.6432
+        ],
+        [
+          -52.306,
+          67.9641
+        ]
+      ]
+    ]
+  },
+  "bbox": [
+    -53.3661,
+    67.9641,
+    -45.0002,
+    70.8883
+  ],
+  "properties": {
+    "mid_datetime": "2025-11-21T23:52:02Z",
+    "created": "2026-09-02T00:37:41Z",
+    "updated": "2026-09-02T00:37:41Z",
+    "latitude": 69.4637,
+    "longitude": -48.9185,
+    "date_dt": 48.0,
+    "platform": "NISAR",
+    "scene_1_id": "NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001",
+    "scene_2_id": "NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001",
+    "scene_1_frame": "170_D_053",
+    "scene_2_frame": "170_D_053",
+    "sat:orbit_state": "descending",
+    "start_datetime": "2025-10-28T23:52:01Z",
+    "end_datetime": "2025-12-15T23:52:03Z",
+    "percent_valid_pixels": 93,
+    "proj:code": "EPSG:3413",
+    "version": "002",
+    "datetime": "2025-11-21T23:52:02Z"
+  },
+  "links": [],
+  "assets": {
+    "data": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093.nc",
+      "type": "application/netcdf",
+      "alternate": {
+        "s3": {
+          "href": "s3://its-live-data/velocity_image_pair/test/v02/N00E000/NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093.nc",
+          "alternate:name": "S3"
+        }
+      },
+      "roles": [
+        "data"
+      ]
+    },
+    "overview": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093.png",
+      "type": "image/png",
+      "roles": [
+        "overview"
+      ]
+    },
+    "thumbnail": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/NISAR_L2_PR_GSLC_003_170_D_053_7700_SHNA_A_20251028T235201_20251028T235238_X05009_N_P_J_001_X_NISAR_L2_PR_GSLC_007_170_D_053_7700_SHNA_A_20251215T235203_20251215T235240_X05009_N_P_J_001_G0120V02_P093_thumb.png",
+      "type": "image/png",
+      "roles": [
+        "thumbnail"
+      ]
+    }
+  },
+  "collection": "itslive-granules"
+}

@@ -1,0 +1,143 @@
+{
+  "type": "Feature",
+  "stac_version": "1.1.0",
+  "stac_extensions": [
+    "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+    "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json",
+    "https://stac-extensions.github.io/version/v1.2.0/schema.json",
+    "https://stac-extensions.github.io/sat/v1.1.0/schema.json"
+  ],
+  "id": "LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -52.306,
+          67.9641
+        ],
+        [
+          -50.4925,
+          68.0404
+        ],
+        [
+          -48.668,
+          68.095
+        ],
+        [
+          -46.836,
+          68.1279
+        ],
+        [
+          -45.0002,
+          68.1389
+        ],
+        [
+          -45.0002,
+          68.824
+        ],
+        [
+          -45.0002,
+          69.5107
+        ],
+        [
+          -45.0002,
+          70.1988
+        ],
+        [
+          -45.0002,
+          70.8883
+        ],
+        [
+          -47.1057,
+          70.8756
+        ],
+        [
+          -49.2056,
+          70.8376
+        ],
+        [
+          -51.2942,
+          70.7745
+        ],
+        [
+          -53.3661,
+          70.6865
+        ],
+        [
+          -53.0734,
+          70.0044
+        ],
+        [
+          -52.8004,
+          69.3233
+        ],
+        [
+          -52.5451,
+          68.6432
+        ],
+        [
+          -52.306,
+          67.9641
+        ]
+      ]
+    ]
+  },
+  "bbox": [
+    -53.3661,
+    67.9641,
+    -45.0002,
+    70.8883
+  ],
+  "properties": {
+    "mid_datetime": "2020-07-27T15:00:32.409742Z",
+    "created": "2026-09-01T23:51:18Z",
+    "updated": "2026-09-01T23:51:18Z",
+    "latitude": 69.4637,
+    "longitude": -48.9185,
+    "date_dt": 48.0,
+    "platform": "LC08",
+    "scene_1_id": "LC08_L1TP_009011_20200703_20200913_02_T1",
+    "scene_2_id": "LC08_L1TP_009011_20200820_20200905_02_T1",
+    "scene_1_frame": "009011",
+    "scene_2_frame": "009011",
+    "sat:orbit_state": "N/A",
+    "start_datetime": "2020-07-03T15:00:24.531814Z",
+    "end_datetime": "2020-08-20T15:00:40.287670Z",
+    "percent_valid_pixels": 78,
+    "proj:code": "EPSG:3413",
+    "version": "002",
+    "datetime": "2020-07-27T15:00:32.409742Z"
+  },
+  "links": [],
+  "assets": {
+    "data": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078.nc",
+      "type": "application/netcdf",
+      "alternate": {
+        "s3": {
+          "href": "s3://its-live-data/velocity_image_pair/test/v02/N00E000/LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078.nc",
+          "alternate:name": "S3"
+        }
+      },
+      "roles": [
+        "data"
+      ]
+    },
+    "overview": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078.png",
+      "type": "image/png",
+      "roles": [
+        "overview"
+      ]
+    },
+    "thumbnail": {
+      "href": "https://its-live-data.s3.amazonaws.com/velocity_image_pair/test/v02/N00E000/LC08_L1TP_009011_20200703_20200913_02_T1_X_LC08_L1TP_009011_20200820_20200905_02_T1_G0120V02_P078_thumb.png",
+      "type": "image/png",
+      "roles": [
+        "thumbnail"
+      ]
+    }
+  },
+  "collection": "itslive-granules"
+}

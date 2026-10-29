@@ -88,8 +88,11 @@ Copy file `u` to `s3://<bucket>/<prefix>/<file name>` (no prefix when `prefix` i
 content type and tag, and return that URI. The credentials are the AWS credential chain's, unless
 [`publish_credentials!`](@ref) set the bucket's own.
 """
+# The key a file `name` is uploaded to under `prefix` (none when empty).
+object_key(prefix::String, name::String) = isempty(prefix) ? name : rstrip(prefix, '/') * "/" * name
+
 function upload_file(u::Upload, bucket::String, prefix::String)
-    key = isempty(prefix) ? basename(u.path) : rstrip(prefix, '/') * "/" * basename(u.path)
+    key = object_key(prefix, basename(u.path))
     uri = "s3://" * bucket * "/" * key
     target = "/vsis3/" * bucket * "/" * key
     vsi_copy_file(u.path, target, ["Content-Type=" * u.type]) ||
@@ -175,9 +178,10 @@ StructTypes.StructType(::Type{PublishInfo}) = StructTypes.Struct()
 """
     deliver(path, platform; bucket, bucket_prefix, publish_bucket) -> Vector{String}
 
-The product at `path` with its browse image and thumbnail (drawn beside it when either upload is asked
-for): published to `publish_bucket` under the product's Open Data prefix, and uploaded to `bucket` under
-`bucket_prefix` — with `publish_info.json`, which records where it was published, when there is both. The
+The product at `path` with its browse image, thumbnail and catalog records (drawn and written beside it
+when either upload is asked for: [`write_browse`](@ref), [`write_catalog_records`](@ref)): published to
+`publish_bucket` under the product's Open Data prefix, and uploaded to `bucket` under `bucket_prefix` —
+with `publish_info.json`, which records where it was published, when there is both. The
 URIs written, in that order; none when both buckets are empty. The publish credentials and the prefix are
 settled before anything is drawn.
 """
@@ -187,8 +191,14 @@ function deliver(path::String, platform::String; bucket::String, bucket_prefix::
     publishing && publish_credentials!(publish_bucket)
     prefix = publishing ? opendata_prefix(platform, path) : ""
     browse, thumb = write_browse(path)
+    # The catalog records name the product where it ends up: published, or else in the HyP3 bucket.
+    home = publishing ? "s3://" * publish_bucket * "/" * object_key(prefix, basename(path)) :
+           "s3://" * bucket * "/" * object_key(bucket_prefix, basename(path))
+    item, pm, sp = write_catalog_records(path, home)
+    # The metadata files carry HyP3's tag for anything that is not an image.
     files = [Upload(path, "application/x-netcdf", "product"), Upload(browse, "image/png", "amp-browse"),
-             Upload(thumb, "image/png", "amp-thumbnail")]
+             Upload(thumb, "image/png", "amp-thumbnail"), Upload(item, "application/json", "product"),
+             Upload(pm, "application/octet-stream", "product"), Upload(sp, "application/octet-stream", "product")]
     uris = String[]
     if publishing
         for f in files
@@ -199,7 +209,7 @@ function deliver(path::String, platform::String; bucket::String, bucket_prefix::
     if publishing
         info = joinpath(dirname(abspath(path)), "publish_info.json")
         write(info, JSON3.write(PublishInfo(publish_bucket, prefix, basename(path))))
-        push!(files, Upload(info, "application/json", ""))
+        push!(files, Upload(info, "application/json", "product"))
     end
     for f in files
         push!(uris, upload_file(f, bucket, bucket_prefix))
