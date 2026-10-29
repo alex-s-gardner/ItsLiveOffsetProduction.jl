@@ -229,7 +229,22 @@ hierarchy is a poor plan on another; treat that as a stopgap.
 
 ## Getting a release
 
-Releases live under `s3://its-live-data/production_code/image_pair/`:
+Tagged releases are attached to the repository's GitHub Releases, each with its bundles, their `.sha256`
+and a `manifest.json`. The same bundles, on `debian:bookworm-slim`, are the container image
+`ghcr.io/alex-s-gardner/itsliveoffsetproduction.jl:<tag>` (`latest` for the newest tag; linux/amd64 and
+linux/arm64):
+
+```bash
+docker run --rm -v "$PWD:/home/autorift/out" -w /home/autorift/out \
+  ghcr.io/alex-s-gardner/itsliveoffsetproduction.jl:latest \
+  S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221 S2B_MSIL1C_20210614T181919_N0300_R127_T19XDJ_20210614T203037 \
+  --scratch /home/autorift/scratch
+```
+
+The product is written to the mounted directory under its ITS_LIVE name. Pass credentials into the container
+as environment variables (`-e AWS_PROFILE`, `-e EARTHDATA_USERNAME`, ...) as the pair needs them.
+
+Releases also live under `s3://its-live-data/production_code/image_pair/`:
 
 ```
 latest.json                                  the current version: {"version": ..., "manifest": ...}

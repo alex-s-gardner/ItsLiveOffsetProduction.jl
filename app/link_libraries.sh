@@ -16,9 +16,12 @@ out=$1
 arts="$out/share/julia/artifacts"
 case "$(uname -s)" in
     Linux)
+        command -v readelf > /dev/null || { echo "link_libraries.sh needs readelf (binutils)" >&2; exit 1; }
         libs() { find "$out" -type f -name '*.so*'; }
-        names() { readelf -d "$1" 2>/dev/null | sed -n 's/.*(SONAME).*\[\(.*\)\]/\1/p'; }
-        deps() { readelf -d "$1" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'; }
+        # `*.so*` also matches files that are not libraries, such as an artifact's
+        # `share/gdb/auto-load/…/libarrow.so.<v>-gdb.py`: readelf refuses them, and they name nothing.
+        names() { { readelf -d "$1" 2>/dev/null || true; } | sed -n 's/.*(SONAME).*\[\(.*\)\]/\1/p'; }
+        deps() { { readelf -d "$1" 2>/dev/null || true; } | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'; }
         host='^(ld-linux.*|lib(c|dl|m|pthread|resolv|rt|util))\.so\.[0-9]+$' ;;
     Darwin)
         libs() { find "$out" -type f -name '*.dylib'; }

@@ -1,0 +1,4 @@
+# The image takes only the staged bundles (see Dockerfile).
+*
+!amd64/
+!arm64/
