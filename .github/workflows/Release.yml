@@ -73,7 +73,7 @@ jobs:
         shell: bash -eo pipefail {0}
         run: |
           bundle=$RUNNER_TEMP/autorift_itslive_production-${{ steps.version.outputs.version }}-${{ matrix.platform }}
-          app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          bash -x app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
           # `juliac` reports verifier errors and still writes an executable for some of them.
           if grep -q 'Verifier error' "$RUNNER_TEMP/build.log"; then echo "::error::the trimmed build has verifier errors"; exit 1; fi
           echo "BUNDLE=$bundle" >> "$GITHUB_ENV"
