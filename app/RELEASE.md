@@ -8,6 +8,7 @@ how a release is laid out; it ships at the root of every bundle and beside the r
 
 ```
 autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [options]
+autorift_itslive_production [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 ```
 
 - **`<sensor>`** names the kind of pair, from the table below. Without it the sensor is the reference's: its
@@ -18,6 +19,9 @@ autorift_itslive_production [<sensor>] <reference> <secondary> [<output.nc>] [op
   name first, and the product reports the earlier one as `id_img1`. The sensor must match the reference; for a
   NISAR pair the reference also decides the polarization (below). A scene of the wrong kind is refused with an
   error naming it.
+- **`-r`/`--reference` and `-s`/`--secondary`** give the two scenes as lists instead, as HyP3 passes them:
+  each scene a separate argument, or several in one separated by spaces or commas, up to the next option. A
+  burst pair's bursts are listed this way; `None` lists nothing.
 - **`<output.nc>`** is where the ITS_LIVE product netCDF is written, at the end of a successful run. Without it
   the product is written to the working directory under its ITS_LIVE name,
   `<earlier>_X_<later>_G0120V02_P<valid>.nc`, `<valid>` the percentage of the searched grid with a result.

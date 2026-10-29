@@ -59,3 +59,20 @@ end
         @test_throws "set one or the other" with_earthdata_netrc(() -> nothing)
     end
 end
+
+@testset "the scenes may be given as --reference and --secondary lists" begin
+    r1, r2 = "S1_342239_IW3_20211202T161351_VV_3876-BURST", "S1_342240_IW3_20211202T161354_VV_3876-BURST"
+    s1, s2 = "S1_342239_IW3_20211214T161351_VV_91C4-BURST", "S1_342240_IW3_20211214T161353_VV_91C4-BURST"
+    a = parse_args(["--reference", r1, r2, "--secondary", s1, s2, "--bucket", "b"])
+    @test (a.sensor, a.reference, a.secondary, a.output, a.bucket) == ("", r1 * "," * r2, s1 * "," * s2, "", "b")
+    # A list runs to the next option, as argparse reads `nargs = '+'`: the output comes before it.
+    a = parse_args(["S1BURST", "pair.nc", "-r", r1 * " " * r2, "-s", s1 * "," * s2, "--quiet"])
+    @test (a.sensor, a.reference, a.secondary, a.output) == ("S1BURST", r1 * "," * r2, s1 * "," * s2, "pair.nc")
+    @test !a.options.verbose
+    # HyP3 renders a list it was not given as `None`.
+    @test parse_args(["-r", L8A, "None", "-s", L8B]).reference == L8A
+    @test_throws "--reference needs at least one scene" parse_args(["--reference", "--secondary", L8B])
+    @test_throws "only one of them is" parse_args(["--reference", L8A])
+    @test_throws "with --reference and --secondary, expected [<sensor>] [<output.nc>], got 2" parse_args(
+        ["x.nc", "y.nc", "-r", L8A, "-s", L8B])
+end
