@@ -65,6 +65,8 @@ jobs:
       - name: Build
         env:
           TRIM_JULIA: julia
+        # pipefail: the build's own status, not tee's.
+        shell: bash -eo pipefail {0}
         run: |
           bundle=$RUNNER_TEMP/autorift_itslive_production-${{ steps.version.outputs.version }}-${{ matrix.platform }}
           app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
@@ -77,8 +79,13 @@ jobs:
         run: |
           # Pulled first: a pull's progress goes to the same stream as the usage.
           docker pull -q debian:bookworm-slim
-          docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1 |
-            grep '^usage:'
+          out=$(docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim /b/bin/autorift_itslive_production --help 2>&1) || true
+          if ! grep -q '^usage:' <<< "$out"; then
+            echo "::error::the bundle does not start in a bare debian:bookworm-slim"
+            printf '%s\n' "$out" | head -40
+            docker run --rm -v "$BUNDLE:/b:ro" debian:bookworm-slim ldd /b/bin/autorift_itslive_production || true
+            exit 1
+          fi
       - name: Pack
         run: tools/release/pack.sh "$BUNDLE" "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4
