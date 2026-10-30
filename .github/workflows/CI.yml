@@ -58,3 +58,38 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v2
       - run: julia --project=app -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
+
+  trim:
+    name: app trimmed build - ubuntu-latest
+    runs-on: ubuntu-latest
+    # `juliac --trim=safe` rejects code the JIT accepts — a dynamic call, an abstract field, a boxed
+    # capture — so the executable is built on every change to the app, not only on a release. Linux
+    # x86-64 only: the release workflow builds every platform.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          # The version `app/Manifest.toml` was resolved with.
+          version: '1.13.0'
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: trim-linux-x86_64
+      - name: Install binutils
+        # `app/link_libraries.sh` reads each library's SONAME with readelf.
+        run: command -v readelf || (sudo apt-get update -q && sudo apt-get install -y -q binutils)
+      - name: Install JuliaC
+        run: julia -e 'import Pkg; Pkg.activate("jcdrv"; shared = true); Pkg.add(name = "JuliaC", version = "0.3.9")'
+      - name: Build
+        env:
+          TRIM_JULIA: julia
+        # pipefail: the build's own status, not tee's.
+        shell: bash -eo pipefail {0}
+        run: |
+          app/build.sh "$RUNNER_TEMP/bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
+          # `juliac` reports verifier errors and still writes an executable for some of them.
+          if grep -q 'Verifier error' "$RUNNER_TEMP/build.log"; then
+            grep -A12 'Verifier error #1:' "$RUNNER_TEMP/build.log" | head -40
+            echo "::error::the trimmed build has verifier errors"; exit 1
+          fi
+          "$RUNNER_TEMP/bundle/bin/autorift_itslive" --help > /dev/null
