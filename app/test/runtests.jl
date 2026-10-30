@@ -12,4 +12,5 @@ using Test
     include("tides.jl")
     include("tidecorrection.jl")
     include("tidegeometry.jl")
+    include("pairquality.jl")
 end
