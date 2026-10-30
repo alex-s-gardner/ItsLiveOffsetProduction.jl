@@ -200,9 +200,12 @@ end
 function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
                                 filter_tile::Union{Nothing,Int}, masked::Bool, output::String, o::RunOptions,
                                 dir::String)
+    q = pair_quality(img)
+    warn_quality(s.early.name, s.late.name, q)
     t0 = time_ns()
     c = correlate(s, img, pre; filter_tile, cache_io = o.cache_io, masked, scratch = dir)
     _log(o, "correlate", t0)
+    check_resolved(c, s.early.name, s.late.name, q)
     t0 = time_ns()
     path = package(s, c, output; tide_model = o.tide_model)
     _log(o, "package", t0)

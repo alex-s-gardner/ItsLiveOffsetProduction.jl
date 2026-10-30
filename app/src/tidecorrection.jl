@@ -497,9 +497,6 @@ end
 _mid_time(id::SLCDatasets.Identification) =
     (t = nisar_datetime(id.start_time); t + (nisar_datetime(id.stop_time) - t) ÷ 2)
 
-# The median of a non-empty vector holding no NaN.
-_median(v::Vector{Float64}) = (s = sort(v); m = length(s); isodd(m) ? s[(m + 1) ÷ 2] : (s[m ÷ 2] + s[m ÷ 2 + 1]) / 2)
-
 """
     map_offset_pixels(ex, ny, spacing) -> (px, py)
 
