@@ -657,15 +657,20 @@ _radar_info(s::RadarSetup{P,G,RslcProduct}, c::Correlation, roi::Float64, lon::F
 Write a NISAR L1 or Sentinel-1 product: the `:radar` schema, in `"radar, map"` coordinates, with the pair's interval.
 `pixel_size_x` is the ground-range spacing at the scene centre, `dr / sin(incidence_angle)`, which matches
 the reference's `rangePixelSize`; nothing reads `pixel_size_y` for this schema, so it is the same value.
+
+Over Antarctic floating ice the range offsets first have the tide and inverse-barometer motion between the
+acquisitions removed ([`tide_correct`](@ref)) using the tide model at `tide_model`; an empty `tide_model`
+leaves them as measured.
 """
-function package(s::RadarSetup, c::Correlation, output::String)
+function package(s::RadarSetup, c::Correlation, output::String; tide_model::String = TIDE_MODEL)
     g = FGP.native_crs(s.region.epsg)
-    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()))
-    g isa FGP.PolarStereographicCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()))
+    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
+    g isa FGP.PolarStereographicCRS &&
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(s.region.epsg)))
 end
 
-function package(s::RadarSetup, c::Correlation, output::String, lonlat::F) where {F}
+function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide_model::String) where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
@@ -679,9 +684,10 @@ function package(s::RadarSetup, c::Correlation, output::String, lonlat::F) where
     info, swath_bias = _radar_info(s, c, roi, lon, lat)
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
+    dx = isempty(tide_model) ? c.dx : tide_correct(s, x, y, lonlat, c.dx, info, tide_model)
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :radar, DETECTION_METHOD, "radar, map", AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), s.pair.dt,
-        georef, info, coeffs, refv, ssm, swath_bias, c.dx, c.dy, c.chip_size, c.scale, c.interpolated)
+        georef, info, coeffs, refv, ssm, swath_bias, dx, c.dy, c.chip_size, c.scale, c.interpolated)
     return write_named_product(output, s.early.name, s.late.name, roi, input)
 end

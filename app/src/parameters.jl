@@ -20,13 +20,16 @@ const PARAMETER_ATTRIBUTES = ("h", "dhdx", "dhdy", "vx0", "vy0", "vxSearchRan", 
 """
     Region
 
-The parameter region covering a pair: its `name`, the output grid's `epsg`, and the twelve parameter
-rasters' `/vsicurl/` paths in [`PARAMETER_ATTRIBUTES`](@ref) order.
+The parameter region covering a pair: its `name`, the output grid's `epsg`, the twelve parameter
+rasters' `/vsicurl/` paths in [`PARAMETER_ATTRIBUTES`](@ref) order, and the `/vsicurl/` paths of its
+floating-ice and ocean masks (1 on the class, the no-data 0 elsewhere), on the same grid.
 """
 struct Region
     name::String
     epsg::Int
     paths::NTuple{12,String}
+    floating::String
+    ocean::String
 end
 
 dem_path(r::Region) = r.paths[1]
@@ -42,7 +45,8 @@ layer, so there is no priority rule to reproduce. A pair outside the coverage is
 function parameter_region(lon::Float64, lat::Float64)
     r = containing_feature(PARAMETER_SHAPEFILE, lon, lat) do feat
         paths = ntuple(i -> _vsicurl(field_string(feat, PARAMETER_ATTRIBUTES[i])), Val(12))
-        Region(field_string(feat, "name"), field_int(feat, "epsg"), paths)
+        Region(field_string(feat, "name"), field_int(feat, "epsg"), paths, _vsicurl(field_string(feat, "floatingice")),
+               _vsicurl(field_string(feat, "ocean")))
     end
     r === nothing && throw(ArgumentError("no ITS_LIVE parameter region contains (" * string(lon) * ", " *
                                          string(lat) * "); the pair is outside the parameters' coverage"))
@@ -87,6 +91,24 @@ function parameter_window(path::String, window::GridWindow)
     xs, ys = window.indices
     return with_dataset(path) do d
         read_window(d, Float64, first(xs) - 1, first(ys) - 1, length(xs), length(ys))
+    end
+end
+
+"""
+    mask_window(path, window, margin) -> (Matrix{Bool}, (left, top))
+
+Where a 0/1 mask raster on the parameter grid is 1, over `window` grown by `margin` pixels on every side
+and clipped to the raster, indexed `[x, y]`; `left` and `top` are how many pixels it reaches before the
+window's first column and row.
+"""
+function mask_window(path::String, window::GridWindow, margin::Int)
+    xs, ys = window.indices
+    return with_dataset(path) do d
+        w, h = rastersize(d)
+        x0, y0 = max(first(xs) - 1 - margin, 0), max(first(ys) - 1 - margin, 0)
+        x1, y1 = min(last(xs) - 1 + margin, w - 1), min(last(ys) - 1 + margin, h - 1)
+        m = read_window(d, UInt8, x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        (m .== 0x01, (first(xs) - 1 - x0, first(ys) - 1 - y0))
     end
 end
 

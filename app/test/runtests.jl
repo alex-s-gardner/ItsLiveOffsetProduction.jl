@@ -9,4 +9,7 @@ using Test
     include("catalog.jl")
     include("sceneid.jl")
     include("antimeridian.jl")
+    include("tides.jl")
+    include("tidecorrection.jl")
+    include("tidegeometry.jl")
 end

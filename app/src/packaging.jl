@@ -102,7 +102,7 @@ function write_named_product(output::String, early::String, late::String, roi::F
 end
 
 """
-    package(s, c, output, lonlat)
+    package(s, c, output, lonlat, tide_model)
 
 Write the product of setup `s` and correlation `c` to `output`. `lonlat` is the grid CRS's transform to
 longitude and latitude, whose type is fixed by the caller's branch.
@@ -110,8 +110,12 @@ longitude and latitude, whose type is fixed by the caller's branch.
 The product grid is the geogrid window's own geotransform at cell centres, where a geotransform names the
 outer edge. `pixel_size_x`/`pixel_size_y` are the *scene's* pixel size: they scale a chip size in pixels
 into metres, and a chip is cut in the imagery.
+
+A NISAR L2 pair's offsets over Antarctic floating ice first have the tide and inverse-barometer motion
+removed ([`tide_correct`](@ref)) using the tide model at `tide_model`; an empty `tide_model` leaves them as
+measured. An optical pair is not corrected.
 """
-function package(s::Setup, c::Correlation, output::String, lonlat::F) where {F}
+function package(s::Setup, c::Correlation, output::String, lonlat::F, tide_model::String) where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
@@ -124,22 +128,24 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F) where {F}
     info = native_img_pair_info(s, roi)
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
+    dx, dy = isempty(tide_model) ? (c.dx, c.dy) : tide_correct(s, x, y, lonlat, c.dx, c.dy, info, tide_model)
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), nothing,
-        georef, info, coeffs, refv, ssm, nothing, c.dx, c.dy, c.chip_size, c.scale, c.interpolated)
+        georef, info, coeffs, refv, ssm, nothing, dx, dy, c.chip_size, c.scale, c.interpolated)
     return write_named_product(output, s.early.name, s.late.name, roi, input)
 end
 
 """
-    package(s, c, output)
+    package(s, c, output; tide_model = TIDE_MODEL)
 
 [`package`](@ref) with the grid CRS's own transform to longitude and latitude — one concrete type per
 branch.
 """
-function package(s::Setup, c::Correlation, output::String)
+function package(s::Setup, c::Correlation, output::String; tide_model::String = TIDE_MODEL)
     g = FGP.native_crs(s.region.epsg)
-    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()))
-    g isa FGP.PolarStereographicCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()))
+    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
+    g isa FGP.PolarStereographicCRS &&
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(s.region.epsg)))
 end
