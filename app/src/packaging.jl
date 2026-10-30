@@ -28,7 +28,8 @@ end
 """
     native_img_pair_info(s, roi_valid) -> ItsLiveOffsetProduction.ImagePairInfo
 
-`IMG_INFO_DICT` for an optical pair, from the two scenes' identities. `path`, `row` and
+`IMG_INFO_DICT` for an optical pair, from the two scenes' identities, and each scene's pass
+(`flight_direction_img1/2`, [`flight_direction`](@ref)) as a radar pair records its. `path`, `row` and
 `collection_number` are written as `Float64` because the reference's own attributes are doubles. A
 Sentinel-2 product carries none of path, row, collection and processing date. A NISAR L2 pair's comes from
 its GSLCs' identification ([`nisar_img_pair_info`](@ref)).
@@ -43,6 +44,8 @@ function native_img_pair_info(s::Setup, roi_valid::Float64)
     id1, id2 = scene_identification(s.early), scene_identification(s.late)
     # Sized for its six entries, so the attributes iterate in the order a six-pair `Dict` constructor gives.
     extra = sizehint!(Dict{String,AttrValue}(), 6)
+    a = Threads.@spawn flight_direction(s.early)
+    b = Threads.@spawn flight_direction(s.late)
     extra["id_img1"] = id1.id
     extra["id_img2"] = id2.id
     extra["sensor_img1"] = id1.sensor
@@ -51,6 +54,8 @@ function native_img_pair_info(s::Setup, roi_valid::Float64)
     extra["correction_level_img2"] = id2.correction_level
     _landsat_extra!(extra, 1, id1)
     _landsat_extra!(extra, 2, id2)
+    extra["flight_direction_img1"] = _await(a)::String
+    extra["flight_direction_img2"] = _await(b)::String
     return ItsLiveOffsetProduction.ImagePairInfo(id1.acquisition_time, id2.acquisition_time,
                                                  id1.mission, id2.mission, id1.satellite, id2.satellite,
                                                  roi_valid, round(lat; digits = 2), round(lon; digits = 2), extra)
