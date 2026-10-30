@@ -5,7 +5,7 @@ usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [option
        autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 
   sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
-               a burst pair (S1BURST), with --subset.
+               a burst pair (S1BURST), with --subset; so is a Sentinel-1 SLC given with --subset.
   reference    a scene's band — a local path, an s3:// URI or an https:// URL — or its STAC item
   secondary    (a local .json or a URL). Landsat: the <scene>_B8.TIF (L7, L8, L9) or <scene>_B2.TIF
                (L4, L5) band, with <scene>_MTL.json and <scene>_ANG.txt beside it, or a landsatlook
@@ -240,7 +240,7 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         set_heap_hint!(a.heap_hint_gib)
         AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
         with_earthdata_netrc() do
-            sensor = isempty(a.sensor) ? infer_sensor(a.reference) : a.sensor
+            sensor = isempty(a.sensor) ? infer_sensor(a.reference; a.subset) : a.sensor
             job = Job(sensor, a.reference, a.secondary; subset = a.subset)
             path = run_job(job, a.output; options = a.options)
             say("wrote " * path)

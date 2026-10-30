@@ -3,20 +3,22 @@
 # uploaded to S3 and published to the ITS_LIVE Open Data bucket.
 
 """
-    infer_sensor(reference) -> String
+    infer_sensor(reference; subset = "") -> String
 
 The sensor code of the pair whose reference input is `reference`: `S1BURST` for bursts — burst IDs,
 extractor URLs, bursts of SLC zips, or SLC zips given as a list, which only a burst pair reads — and
 otherwise the code whose reference pattern ([`SENSORS`](@ref)) the scene name the input carries
-matches. Refused: an input it cannot tell the sensor of, which needs the sensor named.
+matches. A Sentinel-1 SLC reference with a `subset` polygon is a burst pair (`S1BURST`), since only a
+burst pair takes one. Refused: an input it cannot tell the sensor of, which needs the sensor named.
 """
-function infer_sensor(reference::String)
+function infer_sensor(reference::String; subset::String = "")
     (is_burst_list(reference) || is_zip_burst_list(reference) ||
      occursin(S1_BURST_ID, strip(first(split(reference, ',')))) ||
      (occursin(',', reference) && is_zip_list(reference))) && return "S1BURST"
     name = _input_scene_name(reference)
     for s in SENSORS
-        s.code == "S1BURST" || !occursin(s.reference, name) || return s.code
+        (s.code == "S1BURST" || !occursin(s.reference, name)) && continue
+        return s.code == "S1" && !isempty(subset) ? "S1BURST" : s.code
     end
     throw(ArgumentError("cannot tell the sensor from the reference \"" * reference * "\"; name it first, " *
                         "one of " * join([s.code for s in SENSORS], ", ")))

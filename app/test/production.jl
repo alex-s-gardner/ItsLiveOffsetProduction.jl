@@ -39,6 +39,25 @@ end
     @test_throws "cannot tell the sensor from the reference \"item.json\"" infer_sensor("item.json")
 end
 
+@testset "a Sentinel-1 SLC with --subset is a burst pair (#38)" begin
+    poly = "POLYGON ((-55.13492 66.810363, -54.473561 68.324585, -48.482901 67.948708, -49.497015 66.462691, -55.13492 66.810363))"
+    r1, r2 = "S1B_IW_SLC__1SDH_20180630T095955_20180630T100022_011601_015537_A96A",
+             "S1B_IW_SLC__1SDH_20180630T095929_20180630T095957_011601_015537_164D"
+    zip = "https://datapool.asf.alaska.edu/SLC/SB/" * r1 * ".zip"
+    # SLC scene IDs as -r lists them, one ID, and a zip: each is S1 alone and S1BURST with a polygon.
+    for input in (r1 * "," * r2, r1, zip)
+        @test infer_sensor(input; subset = poly) == "S1BURST"
+    end
+    @test infer_sensor(r1) == "S1"
+    # The command of #38, as parsed: no sensor given, so the polygon decides it.
+    a = parse_args(["out.nc", "-r", r1, r2, "-s", "S1B_IW_SLC__1SDH_20180712T095955_20180712T100022_011776_015AA2_1C61",
+                    "S1B_IW_SLC__1SDH_20180712T095930_20180712T095958_011776_015AA2_0514", "--subset", poly])
+    @test isempty(a.sensor)
+    @test infer_sensor(a.reference; a.subset) == "S1BURST"
+    # A polygon does not change any other sensor; Job refuses it for them, as for an explicit S1.
+    @test infer_sensor(L8A; subset = poly) == "L8"
+end
+
 @testset "Earthdata credentials from the environment" begin
     withenv("EARTHDATA_USERNAME" => nothing, "EARTHDATA_PASSWORD" => nothing, "NETRC" => nothing) do
         @test with_earthdata_netrc(() -> get(ENV, "NETRC", "")) == ""
