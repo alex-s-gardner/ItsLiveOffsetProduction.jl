@@ -274,11 +274,20 @@ end
 # the stable-surface mask is external and supplied. `dx`/`dy` are corrected by a single scalar median
 # shift (over whichever mask has any stable coverage), then converted to velocity with the corrected
 # values — the same conversion the correction step used to decide the shift in the first place.
+#
+# `stable_source` is the mask the shift and the error come from (1 stable surface, 2 slowest 25%, 0
+# neither); `stable_shift_applied` is that source when `apply` is set and 0 otherwise, in which case
+# the shift is measured but `dx`/`dy` are left as they are.
 # ---------------------------------------------------------------------------
+
+# Whether `write_product` removes the stable-surface shift from the velocities: every mission but
+# Sentinel-1, whose product records the shift and errors but keeps the shift in its velocities
+# (`stable_shift_flag` 0). See nasa-jpl/its_live_production#63.
+applies_stable_shift(input::ItsLiveInput) = input.img_pair_info.mission_img1 != "S"
 
 function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{Float32},
                                 coeffs::GeogridCoefficients, refv::ReferenceVelocity,
-                                ssm::AbstractMatrix{Bool})
+                                ssm::AbstractMatrix{Bool}, apply::Bool)
     finite_dx = .!isnan.(dx)
     stable_count = count(ssm .& finite_dx)
 
@@ -303,7 +312,8 @@ function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{F
     dx_mean_shift1 = stable_count1 != 0 ? _median_over_mask(dx .- dxref, ssm1) : 0.0
     dy_mean_shift1 = stable_count1 != 0 ? _median_over_mask(dy .- dyref, ssm1) : 0.0
 
-    stable_shift_applied = stable_count != 0 ? 1 : (stable_count1 != 0 ? 2 : 0)
+    stable_source = stable_count != 0 ? 1 : (stable_count1 != 0 ? 2 : 0)
+    stable_shift_applied = apply ? stable_source : 0
     # `Float64` on every branch: a corrected offset is `Float64`, and the uncorrected one converts
     # exactly — it is promoted to `Float64` by the velocity conversion below in any case.
     dxc, dyc = if stable_shift_applied == 1
@@ -320,7 +330,7 @@ function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{F
                   coeffs.offset2vy_2 .* (dyc .* coeffs.scale_factor_2))
 
     return (; vx, vy, dxc, dyc, dxref, dyref, ssm1,
-            stable_count, stable_count1, stable_shift_applied,
+            stable_count, stable_count1, stable_source, stable_shift_applied,
             dx_mean_shift, dy_mean_shift, dx_mean_shift1, dy_mean_shift1)
 end
 
@@ -336,13 +346,15 @@ _error_modeled(error_model::NamedTuple, date_dt_days::Float64) =
 _error_modeled(error_model::Real, date_dt_days::Float64) = error_model / date_dt_days * 365
 
 # `error_modeled` is `_error_modeled(error_model, date_dt_days)`, computed by the caller so that this
-# method is compiled for the types of the two mean shifts alone.
-function _error_family(comp, compref, ssm, ssm1, stable_count, stable_count1, stable_shift_applied,
-                        mean_shift, mean_shift1, error_modeled::Float64)
+# method is compiled for the types of the two mean shifts alone. `error` follows `stable_source`, the
+# mask with stable coverage, whether or not its shift was applied; `stable_shift` is the shift
+# `stable_shift_applied` says was removed.
+function _error_family(comp, compref, ssm, ssm1, stable_count, stable_count1, stable_source,
+                        stable_shift_applied, mean_shift, mean_shift1, error_modeled::Float64)
     error_stationary = stable_count != 0 ? _std_over_mask(comp .- compref, ssm) : NaN
     error_slow = stable_count1 != 0 ? _std_over_mask(comp .- compref, ssm1) : NaN
-    error = stable_shift_applied == 1 ? error_stationary :
-            stable_shift_applied == 2 ? error_slow : error_modeled
+    error = stable_source == 1 ? error_stationary :
+            stable_source == 2 ? error_slow : error_modeled
     # The reference's `else` branch is the bare Python literal `0` (`netcdf_output.py:633` etc.), not
     # a rounded float, so this is an `Int64` to match the `NC_INT64` it writes — `_round1` dispatches
     # on that to leave it alone, where `mean_shift`/`mean_shift1` are always `Float64`.
@@ -546,6 +558,17 @@ function _geo_num(x::Float64)
     return string(s, whole, ".", tenth)
 end
 
+# The reference's wording ties `error` to `stable_shift_flag`, which holds whenever the shift is applied
+# or there is no stable coverage. A product that keeps its measured shift says where `error` comes from.
+function _error_description(name, short, stable_source, stable_shift_applied)
+    lead = "best estimate of " * name * " error: " * short * "_error is populated "
+    stable_shift_applied == 0 && stable_source != 0 &&
+        return lead * "from \"error_stationary\" when \"stable_count_stationary\" is nonzero and from " *
+               "\"error_slow\" otherwise; no velocity bias correction is applied (\"stable_shift_flag\" = 0)"
+    return lead * "according to the approach used for the velocity bias correction as indicated in " *
+           "\"stable_shift_flag\""
+end
+
 function _write_velocity_error_attribs!(v, stats, description, stable_shift_applied,
                                          stable_count, stable_count1)
     _setattr!(v, "error", _round1(stats.error))
@@ -706,7 +729,8 @@ function write_product(path::AbstractString, input::ItsLiveInput)
         dx, dy = _swath_offset_bias_correct(dx, dy, coeffs, input.swath_bias, input.scale_chip_size_y)
     end
 
-    shift = _stable_shift_correct(dx, dy, coeffs, input.reference, input.stable_mask)
+    shift = _stable_shift_correct(dx, dy, coeffs, input.reference, input.stable_mask,
+                                  applies_stable_shift(input))
     vx, vy = shift.vx, shift.vy
     v = _speed(vx, vy)
     nodata = isnan.(vx) .| isnan.(vy)
@@ -717,7 +741,7 @@ function write_product(path::AbstractString, input::ItsLiveInput)
     # --- error/stable-shift attribute family: vx, vy, and (radar only) vr, va ---
     ssm, ssm1 = input.stable_mask, shift.ssm1
     stable_count, stable_count1 = shift.stable_count, shift.stable_count1
-    applied = shift.stable_shift_applied
+    source, applied = shift.stable_source, shift.stable_shift_applied
 
     vx_mean_shift = _velocity_mean_shift(coeffs.offset2vx_1, coeffs.offset2vx_2,
                                           shift.dx_mean_shift, shift.dy_mean_shift, ssm, stable_count != 0)
@@ -731,9 +755,9 @@ function write_product(path::AbstractString, input::ItsLiveInput)
     vxref, vyref = input.reference.vx, input.reference.vy
     vx_error_model = is_radar ? ERROR_VECTOR_RADAR.vx : ERROR_VECTOR_OPTICAL.vx
     vy_error_model = is_radar ? ERROR_VECTOR_RADAR.vy : ERROR_VECTOR_OPTICAL.vy
-    vx_stats = _error_family(vx, vxref, ssm, ssm1, stable_count, stable_count1, applied,
+    vx_stats = _error_family(vx, vxref, ssm, ssm1, stable_count, stable_count1, source, applied,
                               vx_mean_shift, vx_mean_shift1, _error_modeled(vx_error_model, date_dt))
-    vy_stats = _error_family(vy, vyref, ssm, ssm1, stable_count, stable_count1, applied,
+    vy_stats = _error_family(vy, vyref, ssm, ssm1, stable_count, stable_count1, source, applied,
                               vy_mean_shift, vy_mean_shift1, _error_modeled(vy_error_model, date_dt))
 
     v_error_scalar = _v_error_monte_carlo(vx_stats.error, vy_stats.error)
@@ -759,9 +783,9 @@ function write_product(path::AbstractString, input::ItsLiveInput)
         vr_mean_shift1 = _radar_mean_shift(offset2vr, shift.dx_mean_shift1)
         va_mean_shift1 = _radar_mean_shift(offset2va, shift.dy_mean_shift1)
 
-        vr_stats = _error_family(vr, vrref, ssm, ssm1, stable_count, stable_count1, applied,
+        vr_stats = _error_family(vr, vrref, ssm, ssm1, stable_count, stable_count1, source, applied,
                                   vr_mean_shift, vr_mean_shift1, _error_modeled(ERROR_VECTOR_RADAR.vr, date_dt))
-        va_stats = _error_family(va, varef, ssm, ssm1, stable_count, stable_count1, applied,
+        va_stats = _error_family(va, varef, ssm, ssm1, stable_count, stable_count1, source, applied,
                                   va_mean_shift, va_mean_shift1, _error_modeled(ERROR_VECTOR_RADAR.va, date_dt))
 
         dr_to_vr_factor = _finite_median(offset2vr)
@@ -797,7 +821,7 @@ function write_product(path::AbstractString, input::ItsLiveInput)
         data = _ProductData(x, y, vx, vy, v, V_error, vr, va, m11, m12, dr_to_vr_factor,
                             chip_size_width, chip_size_height, interp_mask, nodata,
                             vx_stats, vy_stats, vr_stats, va_stats)
-        _write_file!(path, input, is_radar, data, applied, stable_count, stable_count1,
+        _write_file!(path, input, is_radar, data, source, applied, stable_count, stable_count1,
                      pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, false)
     else
         vxc = _crop_pad(vx, align, NaN32); vyc = _crop_pad(vy, align, NaN32)
@@ -820,7 +844,7 @@ function write_product(path::AbstractString, input::ItsLiveInput)
         data = _ProductData(collect(align.xa), collect(align.ya), vxc, vyc, vcc, vec_, vrc, vac, m11c,
                             m12c, dr_to_vr_factor, cszw, cszh, imask, nodatac,
                             vx_stats, vy_stats, vr_stats, va_stats)
-        _write_file!(path, input, is_radar, data, applied, stable_count, stable_count1,
+        _write_file!(path, input, is_radar, data, source, applied, stable_count, stable_count1,
                      pixel_size_y, img_pair_info_dict, mapping_dict, date_center_dt, true)
     end
     return path
@@ -869,7 +893,7 @@ function _v_error_monte_carlo(vx_error, vy_error; n = 1_000_000)
 end
 
 function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool, d::_ProductData,
-                       stable_shift_applied::Int, stable_count::Int, stable_count1::Int,
+                       stable_source::Int, stable_shift_applied::Int, stable_count::Int, stable_count1::Int,
                        pixel_size_y::Float64, img_pair_info_dict::Dict{String,AttrValue},
                        mapping_dict::Dict{String,AttrValue}, date_center_dt::DateTime, cropped::Bool)
     x, y = d.x, d.y
@@ -961,9 +985,8 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
         _setattr!(vxv, "description", vx_desc)
         _setattr!(vxv, "units", "meter/year")
         _setattr!(vxv, "grid_mapping", "mapping")
-        _write_velocity_error_attribs!(vxv, vx_stats, "best estimate of x_velocity error: vx_error is " *
-            "populated according to the approach used for the velocity bias correction as indicated in " *
-            "\"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
+        _write_velocity_error_attribs!(vxv, vx_stats, _error_description("x_velocity", "vx", stable_source,
+            stable_shift_applied), stable_shift_applied, stable_count, stable_count1)
         _put!(vxv, _quantize_i16(vx, nodata), cropped)
 
         vyv = _defvar_2d!(ds, "vy", Int16, NODATA_I16, dims2, chunks2)
@@ -971,9 +994,8 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
         _setattr!(vyv, "description", vy_desc)
         _setattr!(vyv, "units", "meter/year")
         _setattr!(vyv, "grid_mapping", "mapping")
-        _write_velocity_error_attribs!(vyv, vy_stats, "best estimate of y_velocity error: vy_error is " *
-            "populated according to the approach used for the velocity bias correction as indicated in " *
-            "\"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
+        _write_velocity_error_attribs!(vyv, vy_stats, _error_description("y_velocity", "vy", stable_source,
+            stable_shift_applied), stable_shift_applied, stable_count, stable_count1)
         _put!(vyv, _quantize_i16(vy, nodata), cropped)
 
         vv = _defvar_2d!(ds, "v", Int16, NODATA_I16, dims2, chunks2)
@@ -1001,9 +1023,8 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
             _setattr!(vrv, "description", "velocity in radar range direction")
             _setattr!(vrv, "units", "meter/year")
             _setattr!(vrv, "grid_mapping", "mapping")
-            _write_velocity_error_attribs!(vrv, vr_stats, "best estimate of range_velocity error: " *
-                "vr_error is populated according to the approach used for the velocity bias correction " *
-                "as indicated in \"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
+            _write_velocity_error_attribs!(vrv, vr_stats, _error_description("range_velocity", "vr",
+                stable_source, stable_shift_applied), stable_shift_applied, stable_count, stable_count1)
             _put!(vrv, _quantize_i16(vr, nodata), cropped)
 
             vav = _defvar_2d!(ds, "va", Int16, NODATA_I16, dims2, chunks2)
@@ -1011,9 +1032,8 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
             _setattr!(vav, "description", "velocity in radar azimuth direction")
             _setattr!(vav, "units", "meter/year")
             _setattr!(vav, "grid_mapping", "mapping")
-            _write_velocity_error_attribs!(vav, va_stats, "best estimate of azimuth_velocity error: " *
-                "va_error is populated according to the approach used for the velocity bias correction " *
-                "as indicated in \"stable_shift_flag\"", stable_shift_applied, stable_count, stable_count1)
+            _write_velocity_error_attribs!(vav, va_stats, _error_description("azimuth_velocity", "va",
+                stable_source, stable_shift_applied), stable_shift_applied, stable_count, stable_count1)
             _put!(vav, _quantize_i16(va, nodata), cropped)
 
             m11v = _defvar_2d!(ds, "M11", Float32, NODATA_F32, dims2, chunks2)
