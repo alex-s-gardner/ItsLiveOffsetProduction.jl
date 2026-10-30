@@ -18,6 +18,7 @@ GDAL's bundled curl does not find the system trust store, and the failure otherw
 `SSL certificate problem` or a NULL dataset. `GDAL_DISABLE_READDIR_ON_OPEN` keeps GDAL from listing a
 bucket prefix before every open. The read chunk and cache sizes turn one band from thousands of round
 trips into a few hundred. `AWS_REQUEST_PAYER` because the Landsat bucket is requester-pays.
+`GS_NO_SIGN_REQUEST` for the public ERA5 bucket only, which is read without Google credentials.
 """
 function gdal_network_setup()
     GDAL_CONFIGURED[] && return nothing
@@ -34,6 +35,7 @@ function gdal_network_setup()
                          ("AWS_REQUEST_PAYER", "requester"))
         GDAL.cplsetconfigoption(key, value)
     end
+    GDAL.vsisetpathspecificoption("/vsigs/gcp-public-data-arco-era5", "GS_NO_SIGN_REQUEST", "YES")
     GDAL_CONFIGURED[] = true
     return nothing
 end
@@ -91,6 +93,11 @@ end
 rastersize(d::Dataset) = (Int(GDAL.gdalgetrasterxsize(d.h)), Int(GDAL.gdalgetrasterysize(d.h)))
 
 projection_wkt(d::Dataset) = String(GDAL.gdalgetprojectionref(d.h))
+
+band_count(d::Dataset) = Int(GDAL.gdalgetrastercount(d.h))
+
+# Band `b`'s description, `""` where none is set.
+band_description(d::Dataset, b::Int) = String(GDAL.gdalgetdescription(GDAL.gdalgetrasterband(d.h, b)))
 
 # The no-data value of band `b`, or `nothing` where none is set.
 function band_nodata(d::Dataset, b::Int = 1)
