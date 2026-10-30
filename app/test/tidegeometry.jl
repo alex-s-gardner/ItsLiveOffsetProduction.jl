@@ -228,17 +228,36 @@ end
     @test all(>(1.0e10), distance_to(falses(5, 5), 120.0))
 end
 
-@testset "the ice front facing the ocean is not tapered" begin
+@testset "neither the ice front nor the ocean beyond it is tapered" begin
     # Columns 1–5 grounded, 6–60 floating, 61–80 ocean; 120 m pixels, one-pixel margin on each side.
     nx, ny = 82, 12
-    floating = falses(nx, ny)
-    ocean = falses(nx, ny)
-    floating[7:61, :] .= true
-    ocean[62:end, :] .= true
-    w = grounding_weights(floating, ocean, (1, 1), (80, 10), 120.0)
+    water = falses(nx, ny)
+    water[7:end, :] .= true
+    w = grounding_weights(water, trues(nx, ny), 1, 120.0)
     @test all(iszero, w[1:5, :])                                   # grounded: no correction
     @test all(w[6, :] .≈ grounding_taper(120.0))                   # first floating pixel, 120 m out
     @test all(isone, w[6 + ceil(Int, GROUNDING_TAPER_LENGTH / 120):60, :])
-    @test all(isone, w[60, :])                                     # the ice front itself
-    @test all(iszero, w[61:end, :])                                # open water
+    @test all(isone, w[60:end, :])                                 # the ice front and the open water
+end
+
+@testset "ocean beside a coast is tapered like floating ice" begin
+    # Columns 1–40 land, 41–80 ocean: the correction rises over 2 km from the coastline.
+    water = falses(82, 3)
+    water[42:end, :] .= true
+    w = grounding_weights(water, trues(82, 3), 1, 120.0)
+    @test all(iszero, w[1:40, 1])
+    @test w[41, 1] ≈ grounding_taper(120.0)
+    @test all(isone, w[41 + ceil(Int, GROUNDING_TAPER_LENGTH / 120):80, 1])
+end
+
+@testset "the edge of the masks' data is not a grounding line" begin
+    # Columns 1–40 ocean, 41–80 beyond the masks: the ocean is not tapered toward the unknown side, and the
+    # unknown side is not corrected.
+    water = falses(82, 3)
+    water[1:41, :] .= true
+    known = falses(82, 3)
+    known[1:41, :] .= true
+    w = grounding_weights(water, known, 1, 120.0)
+    @test all(isone, w[1:40, 1])
+    @test all(iszero, w[41:80, 1])
 end

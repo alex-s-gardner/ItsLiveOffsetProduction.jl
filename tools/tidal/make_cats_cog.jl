@@ -9,8 +9,8 @@
 # The grid is the model's own: 2 km cells on the polar stereographic projection with origin latitude
 # −90°, standard parallel −71° and central meridian −70°, written in metres where the file is in km.
 
-using NCDatasets, ArchGDAL
-const AG = ArchGDAL
+using NCDatasets
+include("tide_cog.jl")
 
 function make_cats_cog(src::String, dst::String)
     NCDataset(src) do ds
@@ -23,31 +23,15 @@ function make_cats_cog(src::String, dst::String)
         nx, ny = length(x), length(y)
         gt = [x[1] - dx / 2, dx, 0.0, y[1] - dy / 2, 0.0, dy]
         proj = replace(ds["mapping"].attrib["spatial_proj4"], "+units=km" => "+units=m")
-        names = String[]
-        tmp = dst * ".tmp.tif"
-        AG.create(tmp; driver = AG.getdriver("GTiff"), width = nx, height = ny, nbands = 2 * length(order) + 1,
-                  dtype = Float32, options = ["TILED=YES", "BIGTIFF=YES"]) do out
-            AG.setgeotransform!(out, gt)
-            AG.setproj!(out, AG.toWKT(AG.importPROJ4(proj)))
-            band = 0
-            for (k, c) in enumerate(order), v in ("hRe", "hIm")
-                band += 1
-                # NCDatasets applies `scale_factor`; the variable is (x, y, constituent) in Julia order.
-                a = Float32.(coalesce.(ds[v][:, :, k], NaN32))
-                AG.write!(AG.getband(out, band), a)
-                push!(names, v * "_" * c)
-            end
-            f = Float32.(coalesce.(ds["flexure"][:, :], 0)) ./ 100
-            AG.write!(AG.getband(out, band + 1), f)
-            push!(names, "flexure")
-            for (i, n) in enumerate(names)
-                AG.GDAL.gdalsetdescription(AG.getband(out, i).ptr, n)
-            end
+        Tuple(order) == TIDE_CONSTITUENTS ||
+            error("the model's constituents are ", join(order, " "), "; the app expects ", join(TIDE_CONSTITUENTS, " "))
+        bands = Pair{String,Matrix{Float32}}[]
+        for (k, c) in enumerate(order), v in ("hRe", "hIm")
+            # NCDatasets applies `scale_factor`; the variable is (x, y, constituent) in Julia order.
+            push!(bands, v * "_" * c => Float32.(coalesce.(ds[v][:, :, k], NaN32)))
         end
-        run(`gdal_translate -q -of COG -co COMPRESS=DEFLATE -co PREDICTOR=FLOATING_POINT -co BLOCKSIZE=256
-             -co BIGTIFF=YES -co OVERVIEWS=NONE $tmp $dst`)
-        rm(tmp)
-        return names
+        push!(bands, "flexure" => Float32.(coalesce.(ds["flexure"][:, :], 0)) ./ 100)
+        return write_tide_cog(dst, gt, proj, bands)
     end
 end
 

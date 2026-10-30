@@ -95,20 +95,40 @@ function parameter_window(path::String, window::GridWindow)
 end
 
 """
-    mask_window(path, window, margin) -> (Matrix{Bool}, (left, top))
+    mask_window(path, grid, window, margin) -> (Matrix{UInt8}, Matrix{Bool})
 
-Where a 0/1 mask raster on the parameter grid is 1, over `window` grown by `margin` pixels on every side
-and clipped to the raster, indexed `[x, y]`; `left` and `top` are how many pixels it reaches before the
-window's first column and row.
+A class raster over `window` of `grid` grown by `margin` pixels on every side, indexed `[x, y]`, and where
+the raster covers it. The raster may cover any extent on `grid`'s lattice — same pixel size, edges a whole
+number of pixels from the grid's — and is located by its own geotransform; a pixel beyond it reads as 0
+and is not covered.
 """
-function mask_window(path::String, window::GridWindow, margin::Int)
+function mask_window(path::String, grid::Grid, window::GridWindow, margin::Int)
     xs, ys = window.indices
+    g = grid.geotransform
     return with_dataset(path) do d
+        e = projected_epsg(projection_wkt(d))
+        e == grid.crs.val[1] || throw(ArgumentError(
+            path * " is on EPSG:" * string(e) * "; the product grid is on EPSG:" * string(grid.crs.val[1])))
+        t = geotransform(d)
+        (t[2] == g[2] && t[6] == g[6]) || throw(ArgumentError(
+            path * " has pixels of " * string(t[2]) * " m; the product grid's are " * string(g[2]) * " m"))
+        ox, oy = (t[1] - g[1]) / g[2], (t[4] - g[4]) / g[6]
+        (isinteger(ox) && isinteger(oy)) || throw(ArgumentError(path * " is not on the product grid's lattice"))
+        # Columns and rows of the grown window, zero-based on `grid`, then on the raster.
+        gx0, gy0 = first(xs) - 1 - margin, first(ys) - 1 - margin
+        nx, ny = length(xs) + 2margin, length(ys) + 2margin
+        rx0, ry0 = gx0 - Int(ox), gy0 - Int(oy)
         w, h = rastersize(d)
-        x0, y0 = max(first(xs) - 1 - margin, 0), max(first(ys) - 1 - margin, 0)
-        x1, y1 = min(last(xs) - 1 + margin, w - 1), min(last(ys) - 1 + margin, h - 1)
-        m = read_window(d, UInt8, x0, y0, x1 - x0 + 1, y1 - y0 + 1)
-        (m .== 0x01, (first(xs) - 1 - x0, first(ys) - 1 - y0))
+        out = zeros(UInt8, nx, ny)
+        inside = falses(nx, ny)
+        cx0, cy0 = max(rx0, 0), max(ry0, 0)
+        cx1, cy1 = min(rx0 + nx, w) - 1, min(ry0 + ny, h) - 1
+        if cx1 >= cx0 && cy1 >= cy0
+            cols, rows = cx0 - rx0 + 1:cx1 - rx0 + 1, cy0 - ry0 + 1:cy1 - ry0 + 1
+            out[cols, rows] = read_window(d, UInt8, cx0, cy0, cx1 - cx0 + 1, cy1 - cy0 + 1)
+            inside[cols, rows] .= true
+        end
+        (out, Matrix{Bool}(inside))
     end
 end
 

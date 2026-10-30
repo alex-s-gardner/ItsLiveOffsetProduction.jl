@@ -18,6 +18,11 @@ const L8B = "LC08_L1TP_021248_20220611_20220617_02_T1"
     @test_throws "expected [<sensor>] <reference> <secondary> [<output.nc>], got 1" parse_args([L8A])
     @test_throws "got 5 positional arguments" parse_args(["L8", L8A, L8B, "a.nc", "b.nc"])
     @test_throws "--bucket-prefix needs --bucket" parse_args([L8A, L8B, "--bucket-prefix", "p"])
+    @test_throws "give one of them" parse_args([L8A, L8B, "--no-tide-correction", "--tide-model", "/vsimem/m.tif"])
+    a = parse_args([L8A, L8B, "--tide-model", "/vsimem/m.tif"])
+    @test (a.options.tide, a.options.tide_model) == (true, "/vsimem/m.tif")
+    a = parse_args([L8A, L8B, "--no-tide-correction"])
+    @test (a.options.tide, a.options.tide_model) == (false, "")
 end
 
 @testset "the sensor is read from the reference" begin

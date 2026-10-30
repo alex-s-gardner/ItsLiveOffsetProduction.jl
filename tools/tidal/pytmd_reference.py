@@ -2,13 +2,16 @@
 
     uv venv tidal-env && VIRTUAL_ENV=tidal-env uv pip install pyTMD
     tidal-env/bin/python tools/tidal/pytmd_reference.py synthetic app/test/data/tide_pytmd_synthetic.csv
-    tidal-env/bin/python tools/tidal/pytmd_reference.py cats <CATS2008_v2023.nc> app/test/data/tide_pytmd_cats.csv
+    tidal-env/bin/python tools/tidal/pytmd_reference.py cats <CATS2008_v2023.nc> tools/tidal/tide_pytmd_cats.csv
+    tidal-env/bin/python tools/tidal/pytmd_reference.py gr1km <h_Gr1kmTM_v1> <grid_Gr1kmTM_v1> tools/tidal/tide_pytmd_gr1km.csv
 
 `synthetic` predicts from random complex constants of the ten CATS2008 constituents, so it checks the
 harmonic sum, the nodal corrections and the inferred minor constituents, independent of any model file.
 `cats` predicts from CATS2008_v2023 itself at points on Antarctic ice shelves, with the model's flexure
 applied, so it also checks the reading of the converted model and the spatial interpolation.
-Both use pyTMD's TMD3 path: corrections "TMD3", delta-T 0, minor constituents inferred.
+`gr1km` predicts from Gr1kmTM v1's OTIS files at points on six Greenland ice tongues: pyTMD's OTIS path,
+corrections "OTIS", which for these constituents are the TMD3 ones.
+All use delta-T 0 and infer the minor constituents.
 """
 
 import sys
@@ -17,6 +20,7 @@ import pandas as pd
 import xarray as xr
 import timescale
 import pyTMD.io
+import pyTMD.io.OTIS
 import pyTMD.io.dataset  # noqa: F401  registers the `tmd` accessor
 
 CONSTITUENTS = ["m2", "s2", "n2", "k2", "k1", "o1", "p1", "q1", "mf", "mm"]
@@ -57,13 +61,26 @@ POINTS = [
 ]
 
 
+# (name, lon, lat) on Greenland's floating tongues, from BedMachine Greenland v7's floating ice.
+GREENLAND_POINTS = [
+    ("79n", -20.9, 79.53),
+    ("petermann", -60.9, 80.82),
+    ("zachariae", -19.85, 78.95),
+    ("ryder", -50.49, 81.70),
+    ("storstrommen", -22.55, 76.71),
+    ("steensby", -54.62, 81.53),
+]
+
+GR1KM_CRS = "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +datum=WGS84 +units=km"
+
+
 def tide_days(times):
     return np.asarray(timescale.from_datetime(times).tide, dtype=np.float64)
 
 
-def predict(ds, t):
-    major = ds.tmd.predict(t, deltat=0.0, corrections="TMD3")
-    minor = ds.tmd.infer(t, deltat=0.0, corrections="TMD3")
+def predict(ds, t, corrections="TMD3"):
+    major = ds.tmd.predict(t, deltat=0.0, corrections=corrections)
+    minor = ds.tmd.infer(t, deltat=0.0, corrections=corrections)
     return major + minor
 
 
@@ -89,21 +106,27 @@ def synthetic(out):
     pd.DataFrame(rows).to_csv(out, index=False, float_format="%.17g")
 
 
-def cats(model_file, out):
-    import pyTMD.io.OTIS
-
+def open_cats(model_file):
     # The reader `pyTMD.io.model.open_dataset` uses for a TMD3 file; it takes the CRS from the file.
     ds = pyTMD.io.OTIS.open_tmd3_dataset(model_file, group="z")
     for c in ds.tmd.constituents:
         ds[c] *= ds["flexure"]
-    lon = np.array([p[1] for p in POINTS])
-    lat = np.array([p[2] for p in POINTS])
+    return ds
+
+
+def open_gr1km(h_file, grid_file):
+    ds = pyTMD.io.OTIS.open_otis_dataset(h_file, grid_file, group="z", crs=GR1KM_CRS)
+    ds["flexure"] = xr.ones_like(ds["bathymetry"])
+    return ds
+
+
+def reference(ds, points, corrections, out):
     t = tide_days(TIMES)
     rows = []
-    for name, lo, la in POINTS:
+    for name, lo, la in points:
         x, y = ds.tmd.transform_as(np.array([lo]), np.array([la]), crs=4326)
         local = ds.tmd.interp(xr.DataArray(x, dims="p"), xr.DataArray(y, dims="p"), method="linear")
-        h = np.asarray(predict(local, t)).reshape(-1)
+        h = np.asarray(predict(local, t, corrections=corrections)).reshape(-1)
         flex = float(np.asarray(local["flexure"]).reshape(-1)[0])
         rows.extend(
             {"point": name, "lon": lo, "lat": la, "x_km": float(x[0]), "y_km": float(y[0]), "flexure": flex,
@@ -117,6 +140,9 @@ if __name__ == "__main__":
     if sys.argv[1] == "synthetic":
         synthetic(sys.argv[2])
     elif sys.argv[1] == "cats":
-        cats(sys.argv[2], sys.argv[3])
+        reference(open_cats(sys.argv[2]), POINTS, "TMD3", sys.argv[3])
+    elif sys.argv[1] == "gr1km":
+        reference(open_gr1km(sys.argv[2], sys.argv[3]), GREENLAND_POINTS, "OTIS", sys.argv[4])
     else:
-        raise SystemExit("usage: pytmd_reference.py synthetic <out.csv> | cats <model.nc> <out.csv>")
+        raise SystemExit("usage: pytmd_reference.py synthetic <out.csv> | cats <model.nc> <out.csv> | "
+                         "gr1km <h_file> <grid_file> <out.csv>")

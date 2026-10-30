@@ -41,11 +41,11 @@ options:
   --dem PATH           S1, NL1: a geographic (EPSG:4326) DEM of heights above the WGS84 ellipsoid for the
                        resample's terrain solve, in place of the ITS_LIVE parameter region's DEM plus
                        the EGM2008 geoid
-  --tide-model PATH    S1, S1BURST, NL1, NL2: the CATS2008_v2023 tide model the offsets over Antarctic
-                       floating ice are corrected with, for the ocean tide and, from ERA5 sea level
-                       pressure, the inverse barometer (default: the ITS_LIVE copy in
-                       s3://its-live-data/tidal/)
-  --no-tide-correction leave the offsets over floating ice as measured
+  --tide-model PATH    S1, S1BURST, NL1, NL2: the tide model the offsets over polar floating ice and ocean
+                       are corrected with, for the ocean tide and, from ERA5 sea level pressure, the
+                       inverse barometer, in place of the region's own (CATS2008_v2023 in Antarctica,
+                       Gr1kmTM in Greenland, both in s3://its-live-data/tidal/)
+  --no-tide-correction leave the offsets over floating ice and ocean as measured
   --subset WKT         S1BURST from SLC zips: a POLYGON or MULTIPOLYGON of longitude-latitude vertices,
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
                        the bursts both scenes hold at least half of whose footprint it covers, read out
@@ -115,7 +115,8 @@ function parse_args(args::Vector{String})
     verbose = true
     dem = ""
     orbit_dir = ""
-    tide_model = TIDE_MODEL
+    tide = true
+    tide_model = ""
     subset = ""
     bucket = ""
     bucket_prefix = ""
@@ -172,7 +173,7 @@ function parse_args(args::Vector{String})
             verbose = false
             i += 1
         elseif a == "--no-tide-correction"
-            tide_model = ""
+            tide = false
             i += 1
         elseif startswith(a, "--")
             throw(ArgumentError("unknown option " * a))
@@ -181,6 +182,8 @@ function parse_args(args::Vector{String})
             i += 1
         end
     end
+    (tide || isempty(tide_model)) || throw(ArgumentError(
+        "--tide-model names a tide model and --no-tide-correction turns the correction off; give one of them"))
     # The sensor, when given, comes first; no scene input is a sensor code.
     sensor = !isempty(positional) && is_sensor_code(positional[1]) ? uppercase(popfirst!(positional)) : ""
     flagged = !isempty(lists.reference) || !isempty(lists.secondary)
@@ -201,7 +204,7 @@ function parse_args(args::Vector{String})
     end
     (isempty(bucket) && !isempty(bucket_prefix)) && throw(ArgumentError("--bucket-prefix needs --bucket"))
     return Arguments(sensor, reference, secondary, output,
-                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide_model), hint, subset, bucket,
+                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide, tide_model), hint, subset, bucket,
                      bucket_prefix, publish_bucket)
 end
 
