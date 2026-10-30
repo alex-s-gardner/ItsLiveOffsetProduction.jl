@@ -1057,7 +1057,9 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
             dr_to_vr_factor = d.dr_to_vr_factor::Float64
             vrv = _defvar_2d!(ds, "vr", Int16, NODATA_I16, dims2, chunks2)
             _setattr!(vrv, "standard_name", "range_velocity")
-            _setattr!(vrv, "description", "velocity in radar range direction")
+            # Slant range: `dr_to_vr_factor` scales the slant-range pixel spacing, not ground range
+            # (nasa-jpl/its_live_production#61).
+            _setattr!(vrv, "description", "velocity in radar slant range direction (along the line of sight)")
             _setattr!(vrv, "units", "meter/year")
             _setattr!(vrv, "grid_mapping", "mapping")
             _write_velocity_error_attribs!(vrv, vr_stats, _error_description("range_velocity", "vr",
