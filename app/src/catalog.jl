@@ -124,8 +124,11 @@ end
 
 const STAC_EXTENSIONS = ["https://stac-extensions.github.io/projection/v2.0.0/schema.json",
                          "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json",
-                         "https://stac-extensions.github.io/version/v1.2.0/schema.json",
-                         "https://stac-extensions.github.io/sat/v1.1.0/schema.json"]
+                         "https://stac-extensions.github.io/version/v1.2.0/schema.json"]
+
+# The sat extension, declared only by an item carrying `sat:orbit_state`: its schema requires at least one
+# `sat:` field, and `sat:orbit_state` must be "ascending", "descending" or "geostationary".
+const STAC_SAT_EXTENSION = "https://stac-extensions.github.io/sat/v1.1.0/schema.json"
 
 # `s3://bucket/key` as the bucket's public HTTPS address.
 function s3_https(uri::String)
@@ -163,7 +166,10 @@ _lonlat(v::Tuple{Float64,Float64}) = _json_list((_json_num(v[1]), _json_num(v[2]
 
 The STAC item of product `id`, summarized by `s`, with footprint `fp`, published at `uri`
 (`s3://bucket/prefix/<product>.nc`), whose browse image and thumbnail sit beside it: the document
-`pystac.Item.to_dict` gives the item `cryoforge`'s `create_stac_item` builds, its keys in that order.
+`pystac.Item.to_dict` gives the item `cryoforge`'s `create_stac_item` builds, its keys in that order,
+except for a product without a flight direction (an optical one): its item has neither `sat:orbit_state`
+nor the sat extension, where `cryoforge` writes `"N/A"`, which the extension's schema rejects
+(nasa-jpl/its_live_production#49).
 """
 function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326, id::String, uri::String)
     mission = String(first(split(s.id_img1, '_')))
@@ -171,18 +177,21 @@ function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326,
     mid = iso_utc(parse_pair_date(s.date_center))
     created = iso_utc(parse_created_date(s.date_created))
     updated = isempty(s.date_updated) ? created : iso_utc(parse_created_date(s.date_updated))
-    props = _json_obj((
+    orbit = s.flight_direction_img1
+    props = Pair{String,String}[
         "mid_datetime" => _json_str(mid), "created" => _json_str(created), "updated" => _json_str(updated),
         "latitude" => _json_num(_py_round(fp.center[2], 4)), "longitude" => _json_num(_py_round(fp.center[1], 4)),
         "date_dt" => _json_num(round(s.date_dt)), "platform" => _json_str(mission),
         "scene_1_id" => _json_str(s.id_img1), "scene_2_id" => _json_str(s.id_img2),
-        "scene_1_frame" => _json_str(f1), "scene_2_frame" => _json_str(f2),
-        "sat:orbit_state" => _json_str(_na(s.flight_direction_img1)),
+        "scene_1_frame" => _json_str(f1), "scene_2_frame" => _json_str(f2)]
+    isempty(orbit) || push!(props, "sat:orbit_state" => _json_str(orbit))
+    append!(props, (
         "start_datetime" => _json_str(iso_utc(parse_pair_date(s.acquisition_date_img1))),
         "end_datetime" => _json_str(iso_utc(parse_pair_date(s.acquisition_date_img2))),
         "percent_valid_pixels" => string(round(Int, s.roi_valid_percentage)),
         "proj:code" => _json_str("EPSG:" * string(s.epsg)), "version" => _json_str(ITS_LIVE_DATA_VERSION),
         "datetime" => _json_str(mid)))
+    extensions = isempty(orbit) ? STAC_EXTENSIONS : [STAC_EXTENSIONS; STAC_SAT_EXTENSION]
     beside(ext) = replace(uri, ".nc" => ext)
     image(ext, role) = _json_obj(("href" => _json_str(s3_https(beside(ext))), "type" => _json_str("image/png"),
                                   "roles" => _json_list((_json_str(role),))))
@@ -193,8 +202,8 @@ function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326,
     geometry = _json_obj(("type" => _json_str("Polygon"), "coordinates" => _json_list((_json_list(_lonlat.(fp.ring)),))))
     return _json_obj((
         "type" => _json_str("Feature"), "stac_version" => _json_str("1.1.0"),
-        "stac_extensions" => _json_list(_json_str.(STAC_EXTENSIONS)), "id" => _json_str(id), "geometry" => geometry,
-        "bbox" => _json_list(_json_num.(fp.bbox)), "properties" => props, "links" => "[]",
+        "stac_extensions" => _json_list(_json_str.(extensions)), "id" => _json_str(id), "geometry" => geometry,
+        "bbox" => _json_list(_json_num.(fp.bbox)), "properties" => _json_obj(props), "links" => "[]",
         "assets" => _json_obj(("data" => data, "overview" => image(".png", "overview"),
                                "thumbnail" => image("_thumb.png", "thumbnail"))),
         "collection" => _json_str("itslive-granules")))

@@ -28,8 +28,17 @@ const CATALOG_PRODUCTS = (
             cp(joinpath(CATALOG_DATA, stem * ".nc"), p)
             item, pm, sp = write_catalog_records(p, CATALOG_PREFIX * name * ".nc")
             @test basename(item) == name * ".stac.json"
-            # The reference's item, compacted as `json.dumps(…, separators = (",", ":"))` writes it.
-            @test read(item, String) == read(joinpath(CATALOG_DATA, stem * ".stac.compact.json"), String)
+            # The reference's item, compacted as `json.dumps(…, separators = (",", ":"))` writes it, except
+            # that an optical item carries neither "sat:orbit_state": "N/A" nor the sat extension
+            # (nasa-jpl/its_live_production#49).
+            expected = read(joinpath(CATALOG_DATA, stem * ".stac.compact.json"), String)
+            if stem in ("landsat8", "sentinel2")
+                expected = replace(expected, ",\"https://stac-extensions.github.io/sat/v1.1.0/schema.json\"" => "",
+                                   ",\"sat:orbit_state\":\"N/A\"" => "")
+            end
+            got = read(item, String)
+            @test got == expected
+            @test occursin("sat:orbit_state", got) == occursin("sat/v1.1.0", got)
             @test read(pm, String) == read(joinpath(CATALOG_DATA, stem * ".nc.premet"), String)
             @test read(sp, String) == read(joinpath(CATALOG_DATA, stem * ".nc.spatial"), String)
         end

@@ -156,6 +156,7 @@ end
         NCDataset(path) do ds
             @test haskey(ds, "vx")
             @test haskey(ds, "vr")   # the radar-only schema addition
+            @test occursin("slant range", ds["vr"].attrib["description"])
         end
 
         # A write that fails partway leaves neither the product nor its `.part`.
