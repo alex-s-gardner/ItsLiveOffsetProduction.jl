@@ -247,6 +247,60 @@ end
     @test_throws "requires swath_bias to be nothing" write_product(tempname() * ".nc", input)
 end
 
+@testset "a Sentinel-1 product records its stable shift but does not apply it" begin
+    x = collect(0.0:120.0:(120.0 * 19))
+    y = collect(reverse(0.0:120.0:(120.0 * 9))) .+ 1.0e6
+    ny, nx = length(y), length(x)
+    georef = ItsLiveGeoref(x, y, Dict{String,Any}("grid_mapping_name" => "polar_stereographic"),
+                           (lon, lat) -> (0.0, 0.0), 2.3, 13.9)
+    # `vx = dx`, `vy = dy`, `vr = dx`, `va = dy` against a zero reference velocity.
+    coeffs = GeogridCoefficients(ones(ny, nx), zeros(ny, nx), zeros(ny, nx), ones(ny, nx),
+                                 ones(ny, nx), ones(ny, nx), ones(ny, nx), ones(ny, nx))
+    refv = ReferenceVelocity(zeros(Float32, ny, nx), zeros(Float32, ny, nx))
+    rng = Xoshiro(7)
+    dx = 40.0f0 .+ randn(rng, Float32, ny, nx)
+    dy = -25.0f0 .+ randn(rng, Float32, ny, nx)
+
+    function written(mission)
+        info = ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), mission, mission, "1A", "1A",
+                             80.0, 65.0, -45.0, Dict{String,Any}())
+        input = ItsLiveInput(:radar, "feature", "radar", "1.0.0", "params.shp", "unit-test",
+                             12.0 * 86400, georef, info, coeffs, refv, trues(ny, nx), nothing,
+                             dx, dy, fill(UInt16(32), ny, nx), 1.0, falses(ny, nx))
+        path = tempname() * ".nc"
+        try
+            write_product(path, input)
+            return NCDataset(path) do ds
+                Dict(name => (attrib = Dict(ds[name].attrib), data = collect(skipmissing(ds[name][:, :, 1])))
+                     for name in ("vx", "vy", "vr", "va"))
+            end
+        finally
+            rm(path; force = true)
+        end
+    end
+
+    s1 = written("S")
+    other = written("N")
+    for (name, shift) in (("vx", median(dx)), ("vy", median(dy)), ("vr", median(dx)), ("va", median(dy)))
+        a, b = s1[name].attrib, other[name].attrib
+        @test a["stable_shift_flag"] == 0
+        @test a["stable_shift"] == 0
+        @test b["stable_shift_flag"] == 1
+        @test b["stable_shift"] ≈ shift atol = 0.05
+        # The shift and error are measured the same way whether or not the shift is applied.
+        for key in ("stable_shift_stationary", "stable_count_stationary", "stable_shift_slow",
+                    "stable_count_slow", "error_stationary", "error_slow", "error")
+            @test a[key] == b[key]
+        end
+        @test a["error"] == a["error_stationary"]
+        @test occursin("no velocity bias correction is applied", a["error_description"])
+        @test occursin("as indicated in \"stable_shift_flag\"", b["error_description"])
+        # Velocities keep the shift in the Sentinel-1 product and have it removed otherwise.
+        @test median(s1[name].data) ≈ shift atol = 1
+        @test median(other[name].data) ≈ 0 atol = 1
+    end
+end
+
 @testset "product_filename follows the reference's naming" begin
     a = "LC08_L1TP_009011_20200703_20200913_02_T1"
     b = "LC08_L1TP_009011_20200820_20200905_02_T1"
