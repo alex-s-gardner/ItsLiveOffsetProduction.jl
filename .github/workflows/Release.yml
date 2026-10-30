@@ -5,11 +5,14 @@ name: Release
 #
 #   - a `v*` tag: build, attach the bundles and `manifest.json` to that tag's GitHub Release, and push the
 #     image as `<tag>` and `latest`;
+#   - a push to `main`: build, keep the bundles as workflow artifacts, and push the image as `<version>`
+#     and `test`, the version `git describe` names;
 #   - Run workflow (manual): build from the chosen branch and keep the bundles as workflow artifacts; from
-#     `main`, also push the image as `<version>` and `test`, the version `git describe` names;
+#     `main`, also push the image as on a push there;
 #   - a pull request that changes how a release is built: build the bundles and the image, publish nothing.
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
   pull_request:
@@ -51,7 +54,7 @@ jobs:
       - id: version
         # A tag release is named by its tag; any other build by its distance from the last tag.
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --tags --long --match '*[0-9]*'); fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --dirty --tags --long --match '*[0-9]*'); fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: julia-actions/setup-julia@v2
         with:
