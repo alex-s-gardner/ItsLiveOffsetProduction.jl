@@ -247,7 +247,7 @@ end
     @test_throws "requires swath_bias to be nothing" write_product(tempname() * ".nc", input)
 end
 
-@testset "a Sentinel-1 product records its stable shift but does not apply it" begin
+@testset "a SAR product records its stable shift but does not apply it" begin
     x = collect(0.0:120.0:(120.0 * 19))
     y = collect(reverse(0.0:120.0:(120.0 * 9))) .+ 1.0e6
     ny, nx = length(y), length(x)
@@ -261,8 +261,8 @@ end
     dx = 40.0f0 .+ randn(rng, Float32, ny, nx)
     dy = -25.0f0 .+ randn(rng, Float32, ny, nx)
 
-    function written(mission)
-        info = ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), mission, mission, "1A", "1A",
+    function written(mission, satellite)
+        info = ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), mission, mission, satellite, satellite,
                              80.0, 65.0, -45.0, Dict{String,Any}())
         input = ItsLiveInput(:radar, "feature", "radar", "1.0.0", "params.shp", "unit-test",
                              12.0 * 86400, georef, info, coeffs, refv, trues(ny, nx), nothing,
@@ -279,10 +279,17 @@ end
         end
     end
 
-    s1 = written("S")
-    other = written("N")
+    s1 = written("S", "1A")
+    nisar = written("N", 1)
+    # An optical product on the same inputs: Sentinel-2 shares Sentinel-1's mission code.
+    other = written("S", "2A")
+    @test written("L", "8")["vx"].attrib["stable_shift_flag"] == 1
+    # A mission without a stable-shift decision is refused rather than given a default.
+    @test_throws "mission code S with satellite 3A is not a known mission" written("S", "3A")
     for (name, shift) in (("vx", median(dx)), ("vy", median(dy)), ("vr", median(dx)), ("va", median(dy)))
         a, b = s1[name].attrib, other[name].attrib
+        @test nisar[name].attrib["stable_shift_flag"] == 0
+        @test nisar[name].data == s1[name].data
         @test a["stable_shift_flag"] == 0
         @test a["stable_shift"] == 0
         @test b["stable_shift_flag"] == 1
@@ -295,7 +302,7 @@ end
         @test a["error"] == a["error_stationary"]
         @test occursin("no velocity bias correction is applied", a["error_description"])
         @test occursin("as indicated in \"stable_shift_flag\"", b["error_description"])
-        # Velocities keep the shift in the Sentinel-1 product and have it removed otherwise.
+        # Velocities keep the shift in a SAR product and have it removed otherwise.
         @test median(s1[name].data) ≈ shift atol = 1
         @test median(other[name].data) ≈ 0 atol = 1
     end

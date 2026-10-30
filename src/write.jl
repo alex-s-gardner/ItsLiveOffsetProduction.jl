@@ -280,10 +280,47 @@ end
 # the shift is measured but `dx`/`dy` are left as they are.
 # ---------------------------------------------------------------------------
 
-# Whether `write_product` removes the stable-surface shift from the velocities: every mission but
-# Sentinel-1, whose product records the shift and errors but keeps the shift in its velocities
-# (`stable_shift_flag` 0). See nasa-jpl/its_live_production#63.
-applies_stable_shift(input::ItsLiveInput) = input.img_pair_info.mission_img1 != "S"
+"""
+    STABLE_SHIFT_APPLIED
+
+Whether [`write_product`](@ref) subtracts the stable-surface shift from a mission's velocities, by
+mission name ([`mission_name`](@ref)). The shift and its errors are measured and recorded either way;
+`false` leaves the velocities as measured, with `stable_shift_flag` and `stable_shift` 0.
+
+This is a decision about the product, made per mission: adding a mission means adding it here, and a
+product of a mission not listed is refused. Optical missions have the shift applied; SAR missions do not
+(nasa-jpl/its_live_production#63).
+"""
+const STABLE_SHIFT_APPLIED = Dict(
+    "Landsat" => true,
+    "Sentinel-2" => true,
+    "Sentinel-1" => false,
+    "NISAR" => false,
+)
+
+"""
+    mission_name(info::ImagePairInfo) -> String
+
+The mission of a pair's first image, as named in [`STABLE_SHIFT_APPLIED`](@ref). Sentinel-1 and Sentinel-2
+share the mission code `"S"` and are told apart by the satellite: `"1A"`, `"1B"`, … or `"2A"`, `"2B"`, ….
+"""
+function mission_name(info::ImagePairInfo)
+    m, s = info.mission_img1, string(info.satellite_img1)
+    m == "L" && return "Landsat"
+    m == "N" && return "NISAR"
+    m == "S" && startswith(s, "1") && return "Sentinel-1"
+    m == "S" && startswith(s, "2") && return "Sentinel-2"
+    throw(ArgumentError("mission code " * m * " with satellite " * s * " is not a known mission; add it to " *
+                        "mission_name and STABLE_SHIFT_APPLIED in src/write.jl"))
+end
+
+function applies_stable_shift(input::ItsLiveInput)
+    name = mission_name(input.img_pair_info)
+    applied = get(STABLE_SHIFT_APPLIED, name, nothing)
+    applied === nothing && throw(ArgumentError(
+        "no stable-shift decision for mission " * name * "; add it to STABLE_SHIFT_APPLIED in src/write.jl"))
+    return applied
+end
 
 function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{Float32},
                                 coeffs::GeogridCoefficients, refv::ReferenceVelocity,

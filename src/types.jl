@@ -296,7 +296,9 @@ computes this across three files and writes it in two passes — an uncropped fi
 that crops to the valid extent, pads to a 512-pixel/120 m-aligned grid, and adds a `time` dimension.
 This does all of it in one pass, from one struct.
 
-A Sentinel-1 product (`img_pair_info.mission_img1 == "S"`) differs from the reference in one respect:
+Whether the stable-surface shift is applied is decided per mission in [`STABLE_SHIFT_APPLIED`](@ref);
+a product of a mission not listed there is refused. A SAR product (Sentinel-1, NISAR) differs from the
+reference in one respect:
 the stable-surface shift is measured and recorded (`stable_shift_stationary`, `stable_shift_slow` and
 their counts) but not subtracted from the velocities, so `stable_shift_flag` and `stable_shift` are 0.
 Its `error` is still the stable-surface or slowest-25% RMSE wherever either mask has coverage.
