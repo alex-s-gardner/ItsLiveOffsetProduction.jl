@@ -658,19 +658,19 @@ Write a NISAR L1 or Sentinel-1 product: the `:radar` schema, in `"radar, map"` c
 `pixel_size_x` is the ground-range spacing at the scene centre, `dr / sin(incidence_angle)`, which matches
 the reference's `rangePixelSize`; nothing reads `pixel_size_y` for this schema, so it is the same value.
 
-Over Antarctic floating ice the range offsets first have the tide and inverse-barometer motion between the
-acquisitions removed ([`tide_correct`](@ref)) using the tide model at `tide_model`; an empty `tide_model`
-leaves them as measured.
+Over polar floating ice and ocean the range offsets first have the tide and inverse-barometer motion between
+the acquisitions removed ([`tide_correct`](@ref)) when `tide` is set, with the region's own tide model or,
+when not empty, `tide_model`.
 """
-function package(s::RadarSetup, c::Correlation, output::String; tide_model::String = TIDE_MODEL)
+function package(s::RadarSetup, c::Correlation, output::String; tide::Bool = true, tide_model::String = "")
     g = FGP.native_crs(s.region.epsg)
-    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
+    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
     g isa FGP.PolarStereographicCRS &&
-        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide_model)
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(s.region.epsg)))
 end
 
-function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide_model::String) where {F}
+function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String) where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
@@ -684,7 +684,7 @@ function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide_
     info, swath_bias = _radar_info(s, c, roi, lon, lat)
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
-    dx = isempty(tide_model) ? c.dx : tide_correct(s, x, y, lonlat, c.dx, info, tide_model)
+    dx = tide ? tide_correct(s, x, y, lonlat, c.dx, info, tide_model) : c.dx
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :radar, DETECTION_METHOD, "radar, map", AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), s.pair.dt,

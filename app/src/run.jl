@@ -1,14 +1,15 @@
 # The chain on one job: geometry, imagery, grid, correlation, and the product written to disk.
 
 """
-    RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide_model)
+    RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide, tide_model)
 
 How a run uses local scratch: `scratch` holds the run's tile caches; `cache_io` (`:pread` or `:mmap`) and
 `filter_tile` are `TileCache`'s `io` and `AutoRIFT.FilterTileCache`'s tile side. `dem`, when not empty, is
 the geographic DEM of ellipsoidal heights a radar resample solves terrain against, in place of
 [`parameter_dem`](@ref). `orbit_dir`, when not empty, holds the Sentinel-1 orbit files, in place of those
-[`fetch_s1_orbit`](@ref) downloads. `tide_model` is the tide model a radar pair's floating ice is
-corrected with ([`TIDE_MODEL`](@ref) by default); empty, no correction is made.
+[`fetch_s1_orbit`](@ref) downloads. `tide` is whether a radar pair's polar floating ice and ocean are
+corrected for the tide ([`tide_correct`](@ref)), with the region's own tide model or, when not empty,
+`tide_model`.
 """
 struct RunOptions
     scratch::String
@@ -17,10 +18,11 @@ struct RunOptions
     verbose::Bool
     dem::String
     orbit_dir::String
+    tide::Bool
     tide_model::String
 end
 
-RunOptions() = RunOptions(joinpath(tempdir(), "autorift_itslive"), :pread, 512, true, "", "", TIDE_MODEL)
+RunOptions() = RunOptions(joinpath(tempdir(), "autorift_itslive"), :pread, 512, true, "", "", true, "")
 
 say(s::String) = (write(Core.stderr, s); write(Core.stderr, "\n"); nothing)
 
@@ -207,7 +209,7 @@ function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
     _log(o, "correlate", t0)
     check_resolved(c, s.early.name, s.late.name, q)
     t0 = time_ns()
-    path = package(s, c, output; tide_model = o.tide_model)
+    path = package(s, c, output; o.tide, o.tide_model)
     _log(o, "package", t0)
     return path
 end

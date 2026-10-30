@@ -1,7 +1,8 @@
-# The vertical motion of floating ice between a radar pair's two acquisitions, removed from its offsets:
-# the ocean tide from CATS2008_v2023 with the model's own grounding-zone flexure, and the
-# inverse-barometer response to ERA5 mean sea level pressure, after Wuite et al. (2026, Remote Sens.
-# Environ. 332, 115092, eq. 10).
+# The vertical motion of floating ice and the ocean between a radar pair's two acquisitions, removed from its
+# offsets: the ocean tide and the inverse-barometer response to ERA5 mean sea level pressure, after Wuite et
+# al. (2026, Remote Sens. Environ. 332, 115092, eq. 10). Each polar region has its own tide model and masks
+# ([`tide_setting`](@ref)): in Antarctica CATS2008_v2023 with its grounding-zone flexure on the ITS_LIVE
+# floating-ice and ocean masks, in Greenland Gr1kmTM v1 on BedMachine Greenland v7's floating ice and ocean.
 #
 # In radar geometry (Sentinel-1, NISAR L1) the correlator's `dx` is where a feature sits in the late image
 # minus where it sits in the early one, in range samples of the early acquisition's grid (`correlate`
@@ -11,28 +12,88 @@
 # Δz·cos θ / dr added back. In map geometry (NISAR L2) the same rise appears as horizontal motion toward
 # the sensor; see the `Setup` method of [`tide_correct`](@ref).
 #
-# The correction is applied only on the parameter region's floating-ice mask, so grounded and stable
-# surfaces, and with them the stable-surface statistics, are unchanged. Across the grounding zone it is
-# scaled by the model's flexure and by [`grounding_taper`](@ref), which brings it to zero at the ITS_LIVE
-# grounding line wherever the model's coarser grounding line lies inland of it.
+# The correction is applied only on floating ice and the ocean, so grounded and stable surfaces, and with
+# them the stable-surface statistics, are unchanged. Across the grounding zone it is scaled by the model's
+# flexure and by [`grounding_taper`](@ref), which brings it to zero at the masks' grounding line wherever
+# the model's coarser grounding line lies inland of it. A point the model has no constants for is left as
+# measured, and counted.
 
-"""
-    TIDE_MODEL
+# A tide model is one cloud-optimized GeoTIFF on the model's own polar stereographic grid, in metres: bands
+# `hRe_<c>`, `hIm_<c>` for each constituent of `TIDE_CONSTITUENTS`, zero for one the model does not carry,
+# and `flexure`. `tools/tidal/make_cats_cog.jl` builds CATS2008_v2023's from its netCDF and
+# `tools/tidal/make_otis_cog.jl` Gr1kmTM's from its OTIS files.
+const TIDAL_DATA = "/vsicurl/https://its-live-data.s3.amazonaws.com/tidal/"
+const CATS_MODEL = TIDAL_DATA * "CATS2008_v2023_z.tif"
+const GR1KM_MODEL = TIDAL_DATA * "Gr1kmTM_v1_z.tif"
 
-The CATS2008_v2023 height constants and flexure as one cloud-optimized GeoTIFF, built from the
-model's netCDF by `tools/tidal/make_cats_cog.jl`: bands `hRe_<c>`, `hIm_<c>` for each constituent of
-[`TIDE_CONSTITUENTS`](@ref) and `flexure`, in metres on the model's 2 km polar stereographic grid.
-"""
-const TIDE_MODEL = "/vsicurl/https://its-live-data.s3.amazonaws.com/tidal/CATS2008_v2023_z.tif"
+# BedMachine Greenland v7's mask on the ITS_LIVE NPS 120 m lattice: 0 ocean, 1 ice-free land, 2 grounded
+# ice, 3 floating ice, 255 outside BedMachine. The ITS_LIVE NPS floating-ice mask marks no pixel.
+const BEDMACHINE_MASK = TIDAL_DATA * "BedMachineGreenland_v7_mask_0120m.tif"
+const BEDMACHINE_WATER = [0x00, 0x03]
+const BEDMACHINE_OUTSIDE = 0xff
 
 const TIDE_BANDS = (ntuple(i -> (isodd(i) ? "hRe_" : "hIm_") * TIDE_CONSTITUENTS[(i + 1) ÷ 2], 20)..., "flexure")
 const FLEXURE_BAND = length(TIDE_BANDS)
 
-# The parameter region the tide model covers: Antarctic polar stereographic.
-const ANTARCTIC_EPSG = 3031
-
-# The model's projection, for the metres-based copy of its grid.
+# The models' projections, for the metres-based copies of their grids.
 const CATS_PROJECTION = FGP.LonLatToPolarStereographic(; lat_ts = -71.0, lon_0 = -70.0)
+const GR1KM_PROJECTION = FGP.LonLatToPolarStereographic(; lat_ts = 70.0, lon_0 = -45.0)
+
+"""
+    WaterMask(path, classes, outside = nothing)
+
+A class raster on the product grid's lattice, the values in it that are floating ice or ocean, and the
+value, if any, it holds where it has no data; such a pixel, like one beyond the raster, is neither water
+nor grounded.
+"""
+struct WaterMask
+    path::String
+    classes::Vector{UInt8}
+    outside::Union{UInt8,Nothing}
+end
+
+WaterMask(path::String, classes::Vector{UInt8}) = WaterMask(path, classes, nothing)
+
+"""
+    TideSetting
+
+How a parameter region's pairs are corrected: the tide `model` ([`CATS_MODEL`](@ref), say), the
+`projection` of the model's grid, the `masks` whose union is floating ice and ocean, and the
+`model_description` and `mask_description` the product records.
+"""
+struct TideSetting
+    model::String
+    projection::typeof(CATS_PROJECTION)
+    masks::Vector{WaterMask}
+    model_description::String
+    mask_description::String
+end
+
+"""
+    tide_setting(region, model) -> Union{TideSetting,Nothing}
+
+The tide model and water masks of `region`, with `model` in place of the region's own model unless it is
+empty; `nothing` for a region no tide model covers: Antarctic (EPSG:3031) CATS2008_v2023 on the region's
+floating-ice and ocean masks, Greenland (EPSG:3413) Gr1kmTM v1 on BedMachine Greenland v7's floating ice and
+ocean. The UTM regions are left out: the southern ones end at 56°S, the northern ones hold no ice shelf.
+In the NPS region only Greenland is covered: floating ice and ocean beyond BedMachine and Gr1kmTM, around
+Svalbard or the Canadian Arctic, are left as measured.
+"""
+function tide_setting(region::Region, model::String)
+    own(default) = isempty(model) ? default : model
+    if region.epsg == 3031
+        return TideSetting(own(CATS_MODEL), CATS_PROJECTION,
+                           [WaterMask(region.floating, [0x01]), WaterMask(region.ocean, [0x01])],
+                           "CATS2008_v2023 ocean tide (doi:10.15784/601772) with its flexure",
+                           "the ITS_LIVE floating-ice and ocean masks")
+    elseif region.epsg == 3413
+        return TideSetting(own(GR1KM_MODEL), GR1KM_PROJECTION,
+                           [WaterMask(BEDMACHINE_MASK, BEDMACHINE_WATER, BEDMACHINE_OUTSIDE)],
+                           "Gr1kmTM v1 ocean tide (doi:10.18739/A2B853K18)",
+                           "BedMachine Greenland v7 floating ice and ocean (doi:10.5067/7U2049INNRMP)")
+    end
+    return nothing
+end
 
 # ERA5 hourly mean sea level pressure (Pa) on its 0.25° grid, one Zarr chunk per hour, from Google's
 # public Analysis-Ready, Cloud-Optimized copy; the hour is appended as the time index.
@@ -58,10 +119,11 @@ struct TideConstants
 end
 
 """
-    tide_constants(path, xs, ys) -> TideConstants
+    tide_constants(path, xs, ys) -> Union{TideConstants,Nothing}
 
 The window of the model at `path` covering the model-grid points `xs`, `ys` (metres) with one cell to
-spare, all bands. Throws when the file's bands are not [`TIDE_BANDS`](@ref) or a point lies outside it.
+spare, all bands, clipped to the model's extent; `nothing` when the window lies wholly outside it. Throws
+when the file's bands are not [`TIDE_BANDS`](@ref).
 """
 function tide_constants(path::String, xs::Vector{Float64}, ys::Vector{Float64})
     return with_dataset(path) do d
@@ -73,12 +135,11 @@ function tide_constants(path::String, xs::Vector{Float64}, ys::Vector{Float64})
         end
         gt = geotransform(d)
         w, h = rastersize(d)
-        c0 = floor(Int, (minimum(xs) - gt[1]) / gt[2] - 0.5) - 1
-        c1 = ceil(Int, (maximum(xs) - gt[1]) / gt[2] - 0.5) + 1
-        r0 = floor(Int, (maximum(ys) - gt[4]) / gt[6] - 0.5) - 1
-        r1 = ceil(Int, (minimum(ys) - gt[4]) / gt[6] - 0.5) + 1
-        (c0 >= 0 && r0 >= 0 && c1 < w && r1 < h) || throw(ArgumentError(
-            "the floating ice lies outside the tide model " * path))
+        c0 = max(floor(Int, (minimum(xs) - gt[1]) / gt[2] - 0.5) - 1, 0)
+        c1 = min(ceil(Int, (maximum(xs) - gt[1]) / gt[2] - 0.5) + 1, w - 1)
+        r0 = max(floor(Int, (maximum(ys) - gt[4]) / gt[6] - 0.5) - 1, 0)
+        r1 = min(ceil(Int, (minimum(ys) - gt[4]) / gt[6] - 0.5) + 1, h - 1)
+        (c1 - c0 >= 1 && r1 - r0 >= 1) || return nothing
         bands = Array{Float32,3}(undef, c1 - c0 + 1, r1 - r0 + 1, length(TIDE_BANDS))
         for b in eachindex(TIDE_BANDS)
             bands[:, :, b] = read_window(d, Float32, c0, r0, c1 - c0 + 1, r1 - r0 + 1; band = b)
@@ -92,15 +153,15 @@ end
 
 The ten complex constants at model-grid point `(x, y)`, each scaled by the flexure, and the flexure:
 bilinear between cell centres, as pyTMD interpolates a TMD3 model whose constants it has multiplied by
-the flexure first. The imaginary part is the file's `hIm` negated, pyTMD's convention for TMD3.
+the flexure first. The imaginary part is the file's `hIm` negated, pyTMD's convention for TMD3. A constant
+is NaN where a surrounding cell has none; see [`covers`](@ref) for the window's own extent.
 """
 function tide_point(k::TideConstants, x::Float64, y::Float64)
     px = (x - k.origin[1]) / k.spacing[1]
     py = (y - k.origin[2]) / k.spacing[2]
     i, j = floor(Int, px), floor(Int, py)
     fx, fy = px - i, py - j
-    nx, ny = size(k.bands, 1), size(k.bands, 2)
-    (0 <= i < nx - 1 && 0 <= j < ny - 1) || throw(ArgumentError("a point lies outside the tide model window"))
+    covers(k, x, y) || throw(ArgumentError("a point lies outside the tide model window"))
     w = ((1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy)
     cells = ((i + 1, j + 1), (i + 2, j + 1), (i + 1, j + 2), (i + 2, j + 2))
     B = k.bands
@@ -116,6 +177,17 @@ function tide_point(k::TideConstants, x::Float64, y::Float64)
     end
     flexure = sum(ntuple(q -> w[q] * fl[q], Val(4)))
     return z, flexure
+end
+
+"""
+    covers(k, x, y) -> Bool
+
+Whether model-grid point `(x, y)` has all four cell centres around it inside `k`'s window.
+"""
+function covers(k::TideConstants, x::Float64, y::Float64)
+    i = floor(Int, (x - k.origin[1]) / k.spacing[1])
+    j = floor(Int, (y - k.origin[2]) / k.spacing[2])
+    return 0 <= i < size(k.bands, 1) - 1 && 0 <= j < size(k.bands, 2) - 1
 end
 
 # GDAL's Zarr driver deadlocks in `AdviseRead` (GDAL 3.13.3) when two threads read the store at once.
@@ -223,8 +295,8 @@ end
 _east(lon::Float64) = SV3(-sin(lon), cos(lon), 0.0)
 _north(lon::Float64, lat::Float64) = SV3(-sin(lat) * cos(lon), -sin(lat) * sin(lon), cos(lat))
 
-# The distance over which the correction rises from zero at the ITS_LIVE grounding line: one cell of the
-# tide model's grid, the scale below which the model cannot place its own grounding line.
+# The distance over which the correction rises from zero at the masks' grounding line, in every region:
+# one cell of CATS2008_v2023's 2 km grid, the coarser model's resolution of its own grounding line.
 const GROUNDING_TAPER_LENGTH = 2000.0
 
 """
@@ -300,20 +372,19 @@ function distance_to(feature::AbstractMatrix{Bool}, spacing::Float64)
 end
 
 """
-    grounding_weights(floating, ocean, offset, window_size, spacing) -> Matrix{Float64}
+    grounding_weights(water, known, margin, spacing) -> Matrix{Float64}
 
 The taper weight of each pixel of a product window, indexed `[x, y]`: [`grounding_taper`](@ref) of the
-distance to the nearest grounded pixel on floating ice, zero elsewhere. `floating` and `ocean` are the
-two masks over the window grown by a margin, `offset` how far that margin reaches before the window's
-first column and row. Every pixel that is neither floating ice nor ocean is grounded — grounded ice and
-rock — so an ice front facing the open ocean is not tapered.
+distance to the nearest grounded pixel on floating ice and ocean (`water`), zero elsewhere. `water` and
+`known` (where the masks have data) cover the window grown by `margin` pixels on every side. A known pixel
+that is not water is grounded — grounded ice and land — so an ice front facing the open ocean is not
+tapered, and neither is the ocean beyond it; an unknown pixel is neither grounded nor corrected.
 """
-function grounding_weights(floating::AbstractMatrix{Bool}, ocean::AbstractMatrix{Bool}, offset::NTuple{2,Int},
-                           window_size::NTuple{2,Int}, spacing::Float64)
-    size(floating) == size(ocean) || throw(DimensionMismatch("the floating-ice and ocean masks differ in size"))
-    d = distance_to(.!(floating .| ocean), spacing)
-    nx, ny = window_size
-    return [floating[i + offset[1], j + offset[2]] ? grounding_taper(d[i + offset[1], j + offset[2]]) : 0.0
+function grounding_weights(water::AbstractMatrix{Bool}, known::AbstractMatrix{Bool}, margin::Int, spacing::Float64)
+    size(water) == size(known) || throw(DimensionMismatch("the water and known masks differ in size"))
+    d = distance_to(known .& .!water, spacing)
+    nx, ny = size(water, 1) - 2margin, size(water, 2) - 2margin
+    return [water[i + margin, j + margin] ? grounding_taper(d[i + margin, j + margin]) : 0.0
             for i in 1:nx, j in 1:ny]
 end
 
@@ -343,16 +414,19 @@ end
 """
     tide_correct(s::RadarSetup, x, y, lonlat, dx, info, model) -> Matrix{Float32}
 
-`dx` with the vertical motion of floating ice between the two acquisitions removed, and the corrections
-recorded in `info.extra`; `dx` itself when the region is not Antarctic or the pair covers no floating
-ice. `x`, `y` are the product grid's cell centres and `lonlat` its transform to longitude and latitude;
-`model` is the tide model ([`TIDE_MODEL`](@ref)).
+`dx` with the vertical motion of floating ice and the ocean between the two acquisitions removed, and the
+corrections recorded in `info.extra`; `dx` itself when no tide model covers the region
+([`tide_setting`](@ref)) or the pair covers neither. `x`, `y` are the product grid's cell centres and
+`lonlat` its transform to longitude and latitude; `model`, when not empty, replaces the region's own tide
+model.
 
 The tide and pressure are each scene's at its mid-time; across a scene they change by millimetres.
 """
 function tide_correct(s::RadarSetup, x::Vector{Float64}, y::Vector{Float64}, lonlat::F, dx::Matrix{Float32},
                       info::ItsLiveOffsetProduction.ImagePairInfo, model::String) where {F}
-    idx, w = floating_points(s.region, s.window, s.grid, dx)
+    ts = tide_setting(s.region, model)
+    ts === nothing && return dx
+    idx, w = water_points(ts, s.window, s.grid, dx)
     isempty(idx) && return dx
     lx, _ = ItsLiveOffsetProduction.image_location(s.geometry)
     idx = filter(I -> isfinite(lx[I]), idx)
@@ -360,85 +434,117 @@ function tide_correct(s::RadarSetup, x::Vector{Float64}, y::Vector{Float64}, lon
     coord = s.pair.coordinate
     half = Dates.Millisecond(round(Int, 1000 * coord.nlines / coord.prf / 2))
     t1, t2 = info.acquisition_date_img1 + half, info.acquisition_date_img2 + half
-    dz, _, _, ib = vertical_motion(idx, w, x, y, lonlat, t1, t2, model)
+    v = vertical_motion(ts, idx, w, x, y, lonlat, t1, t2)
     samples, cosθ = cos_incidence(coord)
     out = copy(dx)
-    for (q, I) in enumerate(idx)
-        out[I] = dx[I] + Float32(range_offset_correction(dz[q], _interp_linear(samples, cosθ, lx[I]), coord.dr))
+    for (q, I) in enumerate(v.idx)
+        out[I] = dx[I] + Float32(range_offset_correction(v.dz[q], _interp_linear(samples, cosθ, lx[I]), coord.dr))
     end
-    _record!(info, dz, ib, t2, "range offsets")
+    _record!(info, ts, v, t2, "range offsets")
     return out
 end
 
 """
-    floating_points(region, window, grid, dx) -> (idx, w)
+    water_points(setting, window, grid, dx) -> (idx, w)
 
-The product-grid indices `[row, col]` that are floating ice with a measured `dx`, and the taper weight of
-every pixel ([`grounding_weights`](@ref)), for the Antarctic polar stereographic region; empty for any
-other. The southern UTM regions end at 56°S, outside the tide model.
+The product-grid indices `[row, col]` that are floating ice or ocean with a measured `dx`, and the taper
+weight of every pixel ([`grounding_weights`](@ref)), from the setting's masks over the product window.
 """
-function floating_points(region::Region, window::GridWindow, grid::Grid, dx::Matrix{Float32})
-    idx = CartesianIndex{2}[]
-    region.epsg == ANTARCTIC_EPSG || return idx, zeros(size(dx))
+function water_points(ts::TideSetting, window::GridWindow, grid::Grid, dx::Matrix{Float32})
     gt = grid.geotransform
     gt[2] == -gt[6] || throw(ArgumentError("the product grid's pixels are not square"))
     margin = ceil(Int, GROUNDING_TAPER_LENGTH / gt[2]) + 1
-    floating, off = mask_window(region.floating, window, margin)
-    ocean, off_ocean = mask_window(region.ocean, window, margin)
-    off == off_ocean || throw(DimensionMismatch("the floating-ice and ocean masks are not on one grid"))
-    w = permutedims(grounding_weights(floating, ocean, off, size(window), gt[2]))
-    size(w) == size(dx) || throw(DimensionMismatch("the floating-ice window is not the product grid"))
+    n = size(window) .+ 2margin
+    water, known = falses(n), trues(n)
+    for m in ts.masks
+        c, inside = mask_window(m.path, grid, window, margin)
+        water .|= inside .& [v in m.classes for v in c]
+        known .&= inside .& (m.outside === nothing ? true : c .!= m.outside)
+    end
+    w = permutedims(grounding_weights(water, known, margin, gt[2]))
+    size(w) == size(dx) || throw(DimensionMismatch("the water-mask window is not the product grid"))
+    idx = CartesianIndex{2}[]
     for I in CartesianIndices(dx)
         w[I] > 0 && isfinite(dx[I]) && push!(idx, I)
     end
     return idx, w
 end
 
-"""
-    vertical_motion(idx, w, x, y, lonlat, t1, t2, model) -> (dz, lons, lats, ib)
 
-The tapered vertical motion `dz` (metres, late minus early) of the floating-ice points `idx` between `t1`
-and `t2`: ocean tide plus inverse barometer, scaled by the model's flexure and the taper `w`. Also each
-point's longitude and latitude (degrees) and whether the inverse barometer was included.
 """
-function vertical_motion(idx::Vector{CartesianIndex{2}}, w::Matrix{Float64}, x::Vector{Float64},
-                         y::Vector{Float64}, lonlat::F, t1::DateTime, t2::DateTime, model::String) where {F}
+    VerticalMotion
+
+The tapered vertical motion `dz` (metres, late minus early) of the points `idx` a tide model covers, their
+longitudes `lons` and latitudes `lats` (degrees), whether the inverse barometer was included (`ib`), and how
+many of the points asked for the model has no constants for (`uncovered`).
+"""
+struct VerticalMotion
+    idx::Vector{CartesianIndex{2}}
+    dz::Vector{Float64}
+    lons::Vector{Float64}
+    lats::Vector{Float64}
+    ib::Bool
+    uncovered::Int
+end
+
+"""
+    vertical_motion(setting, idx, w, x, y, lonlat, t1, t2) -> VerticalMotion
+
+The tapered vertical motion between `t1` and `t2` of the floating-ice and ocean points `idx` the setting's
+tide model covers: ocean tide plus inverse barometer, scaled by the model's flexure and the taper `w`.
+Throws when the model covers none of them.
+"""
+function vertical_motion(ts::TideSetting, idx::Vector{CartesianIndex{2}}, w::Matrix{Float64}, x::Vector{Float64},
+                         y::Vector{Float64}, lonlat::F, t1::DateTime, t2::DateTime) where {F}
     n = length(idx)
     lons, lats = Vector{Float64}(undef, n), Vector{Float64}(undef, n)
     mx, my = Vector{Float64}(undef, n), Vector{Float64}(undef, n)
     for (k, I) in enumerate(idx)
         lon, lat = lonlat(x[I[2]], y[I[1]])
         lons[k], lats[k] = lon, lat
-        mx[k], my[k] = CATS_PROJECTION(lon, lat)
+        mx[k], my[k] = ts.projection(lon, lat)
     end
-    p1 = era5_pressure(t1, lons, lats)
-    p2 = p1 === nothing ? nothing : era5_pressure(t2, lons, lats)
-    k = tide_constants(model, mx, my)
+    k = tide_constants(ts.model, mx, my)
     pred1, pred2 = TidePrediction(t1), TidePrediction(t2)
-    dz = Vector{Float64}(undef, n)
-    for (q, I) in enumerate(idx)
-        z, flexure = tide_point(k, mx[q], my[q])
-        d = tide_height(z, pred2) - tide_height(z, pred1)
-        if p1 !== nothing && p2 !== nothing
-            d -= flexure * (p2[q] - p1[q]) * IB_M_PER_PA
-        end
-        dz[q] = d * w[I]
+    kidx, klon, klat = CartesianIndex{2}[], Float64[], Float64[]
+    tide, flex = Float64[], Float64[]
+    for q in 1:n
+        (k !== nothing && covers(k, mx[q], my[q])) || continue
+        z, f = tide_point(k, mx[q], my[q])
+        h = tide_height(z, pred2) - tide_height(z, pred1)
+        isfinite(h) || continue
+        push!(kidx, idx[q]); push!(klon, lons[q]); push!(klat, lats[q]); push!(tide, h); push!(flex, f)
     end
-    return dz, lons, lats, p1 !== nothing && p2 !== nothing
+    # Points selected by the masks but none covered by the model: the masks and model disagree, which an
+    # override model on another region's grid would cause, not a gap at the model's coast.
+    isempty(kidx) && throw(ArgumentError(
+        "the tide model " * ts.model * " has no constants at any of the " * string(n) * " floating-ice and " *
+        "ocean points; it does not cover this region"))
+    p1 = era5_pressure(t1, klon, klat)
+    p2 = p1 === nothing ? nothing : era5_pressure(t2, klon, klat)
+    ib = p1 !== nothing && p2 !== nothing
+    dz = tide .* w[kidx]
+    if ib
+        dz .-= flex .* (p2 .- p1) .* IB_M_PER_PA .* w[kidx]
+    end
+    return VerticalMotion(kidx, dz, klon, klat, ib, n - length(kidx))
 end
 
-function _record!(info::ItsLiveOffsetProduction.ImagePairInfo, dz::Vector{Float64}, ib::Bool, t::DateTime,
+function _record!(info::ItsLiveOffsetProduction.ImagePairInfo, ts::TideSetting, v::VerticalMotion, t::DateTime,
                   removed_from::String)
-    info.extra["tide_correction"] = "CATS2008_v2023 ocean tide (doi:10.15784/601772) with its flexure, " *
-                                    "tapered to zero over 2 km at the grounding line, on floating ice, " *
-                                    "removed from the " * removed_from
-    info.extra["inverse_barometer_correction"] = ib ?
-        "ERA5 mean sea level pressure (ARCO-ERA5), -9.9 mm/hPa, with the tide" :
+    km = string(round(GROUNDING_TAPER_LENGTH / 1000; digits = 1))
+    info.extra["tide_correction"] = ts.model_description * ", tapered to zero over " * km * " km at the " *
+                                    "grounding line, on " * ts.mask_description * ", removed from the " * removed_from
+    mm = string(round(-100_000 * IB_M_PER_PA; digits = 1))
+    info.extra["inverse_barometer_correction"] = v.ib ?
+        "ERA5 mean sea level pressure (ARCO-ERA5), " * mm * " mm/hPa, with the tide" :
         "none: ERA5 does not yet reach " * _hour_string(t)
-    m = round(_median(dz); digits = 3)
+    info.extra["tide_correction_uncovered"] = v.uncovered
+    m = round(_median(v.dz); digits = 3)
     info.extra["tide_correction_dz_median"] = m
-    say("tide       " * string(length(dz)) * " floating points, median dz " * string(m) *
-        " m" * (ib ? "" : ", no inverse barometer: ERA5 does not reach the pair"))
+    say("tide       " * string(length(v.dz)) * " floating-ice and ocean points, median dz " * string(m) * " m" *
+        (v.ib ? "" : ", no inverse barometer: ERA5 does not reach the pair") *
+        (v.uncovered == 0 ? "" : "; " * string(v.uncovered) * " outside the tide model, left as measured"))
     return nothing
 end
 
@@ -446,9 +552,9 @@ end
     tide_correct(s::Setup, x, y, lonlat, dx, dy, info, model) -> (dx, dy)
 
 A NISAR L2 (GSLC) pair's map offsets, `dx` east and `dy` north in pixels of the images (the GSLC grid's
-spacing, not the product grid's), with the vertical motion of floating ice between the two acquisitions
-removed, and the corrections recorded in `info.extra`; the offsets themselves for an optical pair, a
-region that is not Antarctic, or a pair with no floating ice.
+spacing, not the product grid's), with the vertical motion of floating ice and the ocean between the two
+acquisitions removed, and the corrections recorded in `info.extra`; the offsets themselves for an optical
+pair, a region no tide model covers, or a pair over neither.
 
 A GSLC is geocoded onto the DEM, which does not move with the tide, so a surface that rose by Δz between
 the two acquisitions appears in the late image Δz·cot θ along the ground toward the sensor
@@ -459,14 +565,17 @@ function tide_correct(s::Setup, x::Vector{Float64}, y::Vector{Float64}, lonlat::
                       dy::Matrix{Float32}, info::ItsLiveOffsetProduction.ImagePairInfo, model::String) where {F}
     eg = s.early_gslc
     eg === nothing && return dx, dy
-    idx, w = floating_points(s.region, s.window, s.grid, dx)
+    ts = tide_setting(s.region, model)
+    ts === nothing && return dx, dy
+    idx, w = water_points(ts, s.window, s.grid, dx)
     isempty(idx) && return dx, dy
     idx = filter(I -> isfinite(dy[I]), idx)
     isempty(idx) && return dx, dy
     # The correlator measured in image pixels; the images are the GSLCs on their own map grid.
     spacing = s.pair.coordinate.spacing
     t1, t2 = _mid_time(eg.product.identification), _mid_time(s.late_gslc.product.identification)
-    dz, lons, lats, ib = vertical_motion(idx, w, x, y, lonlat, t1, t2, model)
+    v = vertical_motion(ts, idx, w, x, y, lonlat, t1, t2)
+    dz, lons, lats = v.dz, v.lons, v.lats
 
     sv = SLCDatasets.read_orbit(eg.product.backend)
     orb = ImagePairGeometry.Orbit(sv)
@@ -475,7 +584,7 @@ function tide_correct(s::Setup, x::Vector{Float64}, y::Vector{Float64}, lonlat::
     t0 = (first(sv.time) + last(sv.time)) / 2
     pos0, vel0 = ImagePairGeometry.interpolate(orb, t0)
     out_x, out_y = copy(dx), copy(dy)
-    for (q, I) in enumerate(idx)
+    for (q, I) in enumerate(v.idx)
         lon, lat = deg2rad(lons[q]), deg2rad(lats[q])
         p = ImagePairGeometry.lonlat_to_xyz(el, SV3(lon, lat, 0.0))
         r = ImagePairGeometry.geo2rdr(orb, p, t0, t0, pos0, vel0)
@@ -489,7 +598,7 @@ function tide_correct(s::Setup, x::Vector{Float64}, y::Vector{Float64}, lonlat::
         out_x[I] = dx[I] - Float32(mx)
         out_y[I] = dy[I] - Float32(my)
     end
-    _record!(info, dz, ib, t2, "map offsets")
+    _record!(info, ts, v, t2, "map offsets")
     return out_x, out_y
 end
 

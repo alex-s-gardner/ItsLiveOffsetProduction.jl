@@ -1,3 +1,9 @@
 [deps]
 ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 NCDatasets = "85f8d34a-cbdd-5861-8df4-14fed0d494ab"
+
+[compat]
+CSV = "0.10"
+JSON3 = "1"
