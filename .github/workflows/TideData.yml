@@ -2,13 +2,13 @@ name: Tide data
 
 # The tide correction's published inputs, read where production reads them: the tide models and the
 # BedMachine mask in s3://its-live-data/tidal/ and ERA5 in Google's ARCO-ERA5 store, checked against
-# values computed independently (`app/test/tidenetwork.jl`). Weekly and on demand rather than per pull
-# request, so an outage of either store does not block a merge; on a pull request only when the check
-# itself or the code it exercises changes.
+# values computed independently (`app/test/tidenetwork.jl`), and ERA5's lag behind real time. Every three
+# hours, as production runs continuously, and on demand; on a pull request only when the check itself or the
+# code it exercises changes, so an outage of either store does not block other merges.
 
 on:
   schedule:
-    - cron: '17 6 * * 1'
+    - cron: '17 */3 * * *'
   workflow_dispatch:
   pull_request:
     paths:

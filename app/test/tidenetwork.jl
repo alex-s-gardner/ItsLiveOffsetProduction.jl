@@ -9,7 +9,7 @@
 # against xarray's interpolation of the same ERA5 store.
 
 using Test
-using Dates: DateTime
+using Dates: DateTime, Day, UTC, now
 using JSON3
 using AutoriftItsLiveProduction: CATS_MODEL, GR1KM_MODEL, BEDMACHINE_MASK, CATS_PROJECTION, GR1KM_PROJECTION,
                                  TIDE_BANDS, tide_constants, tide_point, tide_height, era5_pressure,
@@ -56,4 +56,13 @@ end
     end
     # An hour ERA5 does not yet reach reads as missing, not as an error.
     @test era5_pressure(DateTime(2049, 1, 1), [0.0], [-80.0]) === nothing
+end
+
+# ERA5's preliminary record (ERA5T) runs about six days behind real time; a pair whose later scene is newer
+# than its end is corrected for the tide alone. A record that stops advancing would leave every new pair
+# without the inverse barometer, so it is caught here rather than in the products.
+const ERA5_MAX_LAG_DAYS = 10
+
+@testset "ERA5 reaches within $(ERA5_MAX_LAG_DAYS) days of now" begin
+    @test era5_pressure(now(UTC) - Day(ERA5_MAX_LAG_DAYS), [0.0], [-80.0]) !== nothing
 end
