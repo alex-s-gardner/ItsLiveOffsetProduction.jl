@@ -1,7 +1,7 @@
 # The command line a production run is given: the sensor read from the inputs when not named, the
 # output path optional, the upload options, and Earthdata credentials from the environment.
 
-using AutoriftItsLiveProduction: parse_args, infer_sensor, with_earthdata_netrc
+using AutoriftItsLiveProduction: parse_args, infer_sensor, with_earthdata_netrc, s1_orbit_kind, s1_orbit_file
 
 const L8A = "LC08_L1TP_021248_20210507_20210517_02_T1"
 const L8B = "LC08_L1TP_021248_20220611_20220617_02_T1"
@@ -126,4 +126,21 @@ end
     @test_throws "only one of them is" parse_args(["--reference", L8A])
     @test_throws "with --reference and --secondary, expected [<sensor>] [<output.nc>], got 2" parse_args(
         ["x.nc", "y.nc", "-r", L8A, "-s", L8B])
+end
+
+@testset "a Sentinel-1 scene's orbit is precise when published, else restituted" begin
+    @test s1_orbit_kind("S1A_OPER_AUX_POEORB_OPOD_20210307T121154_V20210214T225942_20210216T005942.EOF") == "POEORB"
+    @test s1_orbit_kind("/x/S1C_OPER_AUX_RESORB_OPOD_20261027T001856_V20261026T203555_20261027T000815.EOF") == "RESORB"
+    @test_throws "neither a precise (POEORB) nor a restituted (RESORB)" s1_orbit_kind("x.EOF")
+    # A local orbit directory holding both kinds for one scene gives the precise one.
+    mktempdir() do dir
+        for f in ("S1C_OPER_AUX_RESORB_OPOD_20261015T120000_V20261015T050000_20261015T110000.EOF",
+                  "S1C_OPER_AUX_POEORB_OPOD_20261104T070000_V20261014T225942_20261016T005942.EOF")
+            touch(joinpath(dir, f))
+        end
+        scene = "S1C_IW_SLC__1SDH_20261015T083430_20261015T083457_009893_013BA1_8AE8"
+        @test occursin("_AUX_POEORB_", s1_orbit_file(scene, dir, dir))
+        rm(joinpath(dir, "S1C_OPER_AUX_POEORB_OPOD_20261104T070000_V20261014T225942_20261016T005942.EOF"))
+        @test occursin("_AUX_RESORB_", s1_orbit_file(scene, dir, dir))
+    end
 end
