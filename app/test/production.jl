@@ -12,7 +12,7 @@ const L8B = "LC08_L1TP_021248_20220611_20220617_02_T1"
           ("", L8A, L8B, "", "", "", "")
     a = parse_args(["l8", L8A, L8B, "out.nc", "--bucket", "b", "--bucket-prefix", "p/q", "--publish-bucket", "its-live-data"])
     @test (a.sensor, a.output, a.bucket, a.bucket_prefix, a.publish_bucket) == ("L8", "out.nc", "b", "p/q", "its-live-data")
-    # HyP3 passes a job parameter it has no value for as `None`.
+    # HyP3 passes a job parameter it has no value for as `None` (#47); an empty value means the same.
     @test parse_args([L8A, L8B, "--publish-bucket", "None"]).publish_bucket == ""
     @test parse_args([L8A, L8B, "out.nc"]).output == "out.nc"
     @test_throws "expected [<sensor>] <reference> <secondary> [<output.nc>], got 1" parse_args([L8A])
@@ -61,6 +61,29 @@ end
     @test infer_sensor(a.reference; a.subset) == "S1BURST"
     # A polygon does not change any other sensor; Job refuses it for them, as for an explicit S1.
     @test infer_sensor(L8A; subset = poly) == "L8"
+end
+
+@testset "an option given None, empty, or an empty geometry is unset (#47)" begin
+    plain = parse_args([L8A, L8B])
+    for unset in ("None", "", " ")
+        a = parse_args([L8A, L8B, "--dem", unset, "--orbit-dir", unset, "--subset", unset, "--bucket", unset,
+                        "--bucket-prefix", unset, "--publish-bucket", unset, "--tide-model", unset])
+        @test (a.subset, a.bucket, a.bucket_prefix, a.publish_bucket) == ("", "", "", "")
+        @test (a.options.dem, a.options.orbit_dir, a.options.tide, a.options.tide_model) ==
+              (plain.options.dem, plain.options.orbit_dir, true, "")
+    end
+    for empty in ("POLYGON EMPTY", "MULTIPOLYGON EMPTY", "polygon empty")
+        @test parse_args([L8A, L8B, "--subset", empty]).subset == ""
+    end
+    # A Sentinel-1 SLC pair with an unset --subset stays an SLC pair, as HyP3 runs one.
+    r1 = "S1B_IW_SLC__1SDH_20180630T095955_20180630T100022_011601_015537_A96A"
+    a = parse_args(["-r", r1, "-s", "S1B_IW_SLC__1SDH_20180712T095955_20180712T100022_011776_015AA2_1C61",
+                    "--subset", "None", "--publish-bucket", "None"])
+    @test infer_sensor(a.reference; a.subset) == "S1"
+    # An unset --tide-model with --no-tide-correction is no conflict.
+    @test parse_args([L8A, L8B, "--tide-model", "None", "--no-tide-correction"]).options.tide == false
+    # Anything else is still a value.
+    @test parse_args([L8A, L8B, "--bucket", "my-bucket"]).bucket == "my-bucket"
 end
 
 @testset "Earthdata credentials from the environment" begin

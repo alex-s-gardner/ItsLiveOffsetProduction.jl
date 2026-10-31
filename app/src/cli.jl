@@ -61,6 +61,9 @@ options:
                        publish_info.json, which records where, is uploaded there too
   --quiet              no per-stage timings on stderr
 
+An option that takes a value is left unset when its value is None or empty, and --subset also when it is
+POLYGON EMPTY or MULTIPOLYGON EMPTY: a job runner can then pass every option whether or not it is set.
+
 FFTW wisdom: unless AUTORIFT_FFTW_WISDOM_DIR names a directory to read and grow, each run starts from a
 copy of the wisdom the bundle ships for this CPU (share/autorift_itslive/fftw-wisdom), so runs
 plan their transforms alike, and discards what it measures.
@@ -101,6 +104,16 @@ end
 scene_list_items(v::String) =
     String[String(x) for x in split(v, (' ', '\t', '\n', ','); keepempty = false) if x != "None"]
 
+# The value of an option that takes one, as given or `""` for none. HyP3 runs the container with every job
+# parameter on the command line and passes one the job does not set as `None` (#47); an empty value means
+# the same. For `--subset`, so does an empty geometry (`POLYGON EMPTY`, `MULTIPOLYGON EMPTY`).
+function option_value(option::String, v::String)
+    s = strip(v)
+    (isempty(s) || s == "None") && return ""
+    option == "--subset" && uppercase(s) in ("POLYGON EMPTY", "MULTIPOLYGON EMPTY") && return ""
+    return v
+end
+
 """
     parse_args(args) -> Arguments
 
@@ -138,6 +151,10 @@ function parse_args(args::Vector{String})
                  "--bucket", "--bucket-prefix", "--publish-bucket", "--tide-model")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
+            # An unset value leaves the option's default, as if it were not given.
+            if a in ("--dem", "--orbit-dir", "--subset", "--bucket", "--bucket-prefix", "--publish-bucket", "--tide-model")
+                v = option_value(a, v)
+            end
             if a == "--scratch"
                 scratch = v
             elseif a == "--dem"
@@ -146,7 +163,7 @@ function parse_args(args::Vector{String})
                 orbit_dir = v
             elseif a == "--tide-model"
                 # A GDAL virtual path is already what GDAL opens.
-                tide_model = startswith(v, "/vsi") ? v : gdal_path(v)
+                tide_model = isempty(v) || startswith(v, "/vsi") ? v : gdal_path(v)
             elseif a == "--subset"
                 subset = v
             elseif a == "--bucket"
@@ -154,8 +171,7 @@ function parse_args(args::Vector{String})
             elseif a == "--bucket-prefix"
                 bucket_prefix = v
             elseif a == "--publish-bucket"
-                # HyP3 passes a null job parameter as `None`.
-                publish_bucket = v == "None" ? "" : v
+                publish_bucket = v
             elseif a == "--cache-io"
                 v in ("pread", "mmap") || throw(ArgumentError("--cache-io is pread or mmap, got " * v))
                 cache_io = v == "pread" ? :pread : :mmap
