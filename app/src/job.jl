@@ -179,6 +179,20 @@ end
 
 const S2_MIRROR = "https://storage.googleapis.com/gcp-public-data-sentinel-2/tiles"
 
+# `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile is field 6, `T<zone><band><square>`.
+function _s2_tile(name::String)
+    tile = String(split(name, '_')[6])
+    (startswith(tile, "T") && length(tile) == 6) || throw(ArgumentError(
+        "cannot read an MGRS tile out of \"" * name * "\"; expected field 6 like T22WEB"))
+    return tile
+end
+
+# The product's `.SAFE` on the mirror, which splits the tile into three directory levels.
+function s2_safe_url(name::String)
+    tile = _s2_tile(name)
+    return S2_MIRROR * "/" * tile[2:3] * "/" * tile[4:4] * "/" * tile[5:6] * "/" * name * ".SAFE"
+end
+
 """
     s2_band_url(name) -> String
 
@@ -186,12 +200,8 @@ The `B08.jp2` of Sentinel-2 product `name` on the public Google Cloud mirror. Th
 a `.SAFE` is not derivable from the product name, so the product's `manifest.safe` is read for it.
 """
 function s2_band_url(name::String)
-    # `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile is field 6, `T<zone><band>
-    # <square>`, and the mirror splits it into three directory levels.
-    tile = split(name, '_')[6]
-    (startswith(tile, "T") && length(tile) == 6) || throw(ArgumentError(
-        "cannot read an MGRS tile out of \"" * name * "\"; expected field 6 like T22WEB"))
-    safe = S2_MIRROR * "/" * tile[2:3] * "/" * tile[4:4] * "/" * tile[5:6] * "/" * name * ".SAFE"
+    safe = s2_safe_url(name)
+    tile = _s2_tile(name)
     manifest = read_text(safe * "/manifest.safe")
     # The band under IMG_DATA only: from processing baseline 04.00 the manifest also lists QI_DATA masks
     # whose names end in B08.jp2.

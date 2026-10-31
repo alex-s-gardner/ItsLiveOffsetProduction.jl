@@ -18,5 +18,6 @@ else
         include("tidecorrection.jl")
         include("tidegeometry.jl")
         include("pairquality.jl")
+        include("flightdirection.jl")
     end
 end
