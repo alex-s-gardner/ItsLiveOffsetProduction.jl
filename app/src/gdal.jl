@@ -36,6 +36,10 @@ function gdal_network_setup()
         GDAL.cplsetconfigoption(key, value)
     end
     GDAL.vsisetpathspecificoption("/vsigs/gcp-public-data-arco-era5", "GS_NO_SIGN_REQUEST", "YES")
+    # The ECMWF open-data bucket answers a burst of requests with 503 Slow Down; retried with backoff.
+    for (key, value) in (("GDAL_HTTP_MAX_RETRY", "5"), ("GDAL_HTTP_RETRY_DELAY", "0.5"))
+        GDAL.vsisetpathspecificoption("/vsicurl/" * IFS_DATA, key, value)
+    end
     GDAL_CONFIGURED[] = true
     return nothing
 end
