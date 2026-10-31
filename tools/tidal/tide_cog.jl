@@ -15,8 +15,9 @@ end
     write_tide_cog(dst, gt, proj4, bands)
 
 `bands`, pairs of band name and `[x, y]` Float32 array in band order, written to `dst` as one
-cloud-optimized GeoTIFF on geotransform `gt` (metres) and projection `proj4`: DEFLATE with the floating-point
-predictor, 256-pixel tiles, nearest-neighbour overviews.
+cloud-optimized GeoTIFF on geotransform `gt` (metres) and projection `proj4`: DEFLATE with the horizontal
+predictor (2), 256-pixel tiles, no overviews. Predictor 2 rather than the floating-point predictor (3): GDAL
+and ChunkManifests both read it, and ChunkManifests does not read predictor 3.
 """
 function write_tide_cog(dst::String, gt::Vector{Float64}, proj4::String, bands::Vector{Pair{String,Matrix{Float32}}})
     nx, ny = size(last(first(bands)))
@@ -30,8 +31,8 @@ function write_tide_cog(dst::String, gt::Vector{Float64}, proj4::String, bands::
             AG.GDAL.gdalsetdescription(AG.getband(out, i).ptr, name)
         end
     end
-    run(`gdal_translate -q -of COG -co COMPRESS=DEFLATE -co PREDICTOR=FLOATING_POINT -co BLOCKSIZE=256
-         -co BIGTIFF=YES -co OVERVIEW_RESAMPLING=NEAREST $tmp $dst`)
+    run(`gdal_translate -q -of COG -co COMPRESS=DEFLATE -co PREDICTOR=2 -co BLOCKSIZE=256 -co BIGTIFF=YES
+         -co OVERVIEWS=NONE $tmp $dst`)
     rm(tmp)
     return first.(bands)
 end

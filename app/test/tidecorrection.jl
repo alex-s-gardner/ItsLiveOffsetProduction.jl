@@ -6,7 +6,7 @@ using JSON3
 using AutoriftItsLiveProduction: TideConstants, tide_point, tide_height, TIDE_BANDS, CATS_PROJECTION,
                                  GR1KM_PROJECTION, CATS_MODEL, GR1KM_MODEL, BEDMACHINE_MASK, Region,
                                  tide_setting, tide_constants, covers, mask_window,
-                                 epsg_wkt as A_epsg_wkt,
+                                 epsg_wkt as A_epsg_wkt, ifs_msl_range, _ifs_run,
                                  _era5_hours, _era5_at, _interp_linear, _hour_string
 import ImagePairGeometry as IPG
 import GDAL
@@ -129,6 +129,19 @@ end
     write_bands("/vsimem/south.tif", ones(Float32, 2, 2, 1), (0.0, 120.0, 0.0, 0.0, 0.0, -120.0), ["c"]; epsg = 3031)
     @test_throws "is on EPSG:3031; the product grid is on EPSG:3413" mask_window("/vsimem/south.tif", grid,
                                                                                   CartesianIndices((1:2, 1:2)), 0)
+end
+
+@testset "an IFS run's surface pressure field is found in its index" begin
+    # Lines as ECMWF open data's `.index` files write them: one JSON object per field.
+    index = """
+    {"domain": "g", "date": "20261024", "time": "0000", "type": "fc", "stream": "oper", "step": "0", "levelist": "1000", "levtype": "pl", "param": "msl", "_offset": 10, "_length": 20}
+    {"domain": "g", "date": "20261024", "time": "0000", "type": "fc", "stream": "oper", "step": "0", "levtype": "sfc", "param": "2t", "_offset": 100, "_length": 200}
+    {"domain": "g", "date": "20261024", "time": "0000", "type": "fc", "stream": "oper", "step": "0", "levtype": "sfc", "param": "msl", "_offset": 1527856, "_length": 527204}
+    """
+    @test ifs_msl_range(index) == (1527856, 527204)
+    @test ifs_msl_range("{\"levtype\": \"sfc\", \"param\": \"2t\", \"_offset\": 1, \"_length\": 2}") === nothing
+    @test _ifs_run(DateTime(2026, 10, 24, 6)) ==
+          "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261024/06z/ifs/0p25/oper/20261024060000-0h-oper-fc"
 end
 
 @testset "CATS2008_v2023 is on its own projection" begin

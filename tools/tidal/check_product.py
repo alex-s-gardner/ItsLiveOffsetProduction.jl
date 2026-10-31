@@ -12,9 +12,11 @@ neither ocean nor floating ice (`BEDMACHINE_MASK`).
 
 Nothing here is shared with the Julia correction. The tide comes from pyTMD and the original model netCDF;
 the incidence angle comes from ESA's own geolocation grid in the SAFE annotations, interpolated to each
-pixel by position. The inverse barometer is reported separately: ERA5 mean sea level pressure read with
-xarray from Google's ARCO-ERA5 Zarr store when `--ib` is given, left in the residual otherwise. Only the
-range velocity `vr` and the range-pixel factor `dr_to_vr_factor` are read from the products.
+pixel by position. The inverse barometer is reported separately when `--ib` is given, from the source the
+product names in `inverse_barometer_correction`: ERA5 mean sea level pressure read with xarray from Google's
+ARCO-ERA5 Zarr store, or the ECMWF IFS runs' surface `msl` read with rasterio from the open-data bucket; it
+is left in the residual otherwise. Only the range velocity `vr`, the range-pixel factor `dr_to_vr_factor`
+and that attribute are read from the products.
 
 For every corrected pixel the expected change in `vr` is
 
@@ -82,6 +84,37 @@ def open_model(files):
     return (open_cats(files[0]), "TMD3") if len(files) == 1 else (open_gr1km(*files), "OTIS")
 
 
+IFS_DATA = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+
+
+def ifs_msl(run, lon, lat):
+    """Surface msl (Pa) of the IFS run `run` (a whole multiple of 6 h) at the points, bilinear."""
+    import json, urllib.request
+    import rasterio
+    from rasterio.windows import Window
+    stem = f"{IFS_DATA}/{run:%Y%m%d}/{run:%H}z/ifs/0p25/oper/{run:%Y%m%d%H}0000-0h-oper-fc"
+    rec = next(json.loads(l) for l in urllib.request.urlopen(stem + ".index").read().decode().splitlines()
+               if '"param": "msl"' in l and '"levtype": "sfc"' in l)
+    with rasterio.open(f"/vsisubfile/{rec['_offset']}_{rec['_length']},/vsicurl/{stem}.grib2") as r:
+        a = r.read(1).astype(float)                      # rows from 90N, columns from 180W, 0.25 deg
+    px = (np.asarray(lon) + 180.0) / 0.25; py = (90.0 - np.asarray(lat)) / 0.25
+    i, j = np.floor(px).astype(int), np.floor(py).astype(int); fx, fy = px - i, py - j
+    i0, i1 = i % 1440, (i + 1) % 1440
+    return ((1 - fx) * (1 - fy) * a[j, i0] + fx * (1 - fy) * a[j, i1] + (1 - fx) * fy * a[j + 1, i0] +
+            fx * fy * a[j + 1, i1])
+
+
+def ifs_dh(lon, lat, t):
+    import datetime as dt
+    p = []
+    for ti in t:
+        ti = ti.astype("datetime64[ms]").astype(dt.datetime)
+        r0 = ti.replace(minute=0, second=0, microsecond=0, hour=ti.hour - ti.hour % 6)
+        f = (ti - r0).total_seconds() / 21600.0
+        p.append((1 - f) * ifs_msl(r0, lon, lat) + f * ifs_msl(r0 + dt.timedelta(hours=6), lon, lat))
+    return -(p[1] - p[0]) / (1030.0 * 9.81)
+
+
 def ib_dh(lon, lat, t):
     import gcsfs  # noqa: F401  registers gs:// for xarray
     ds = xr.open_zarr("gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3",
@@ -129,8 +162,10 @@ def main(corrected, uncorrected, ref_safe, sec_safe, *model):
     if corrections == "OTIS":
         full &= away_from_land(x[ix], y[iy])
     if use_ib:
-        dib = ib_dh(lon[full], lat[full], t)
-        print(f"Δh_IB (xarray ERA5): median {np.median(dib):+.3f} m")
+        source = str(a["img_pair_info"].getncattr("inverse_barometer_correction"))
+        ifs = source.startswith("ECMWF IFS")
+        dib = (ifs_dh if ifs else ib_dh)(lon[full], lat[full], t)
+        print(f"Δh_IB ({'rasterio IFS' if ifs else 'xarray ERA5'}, as the product names): median {np.median(dib):+.3f} m")
         expected[full] += k * w[full] * dib * cos_t[full] / dr
     e, o = expected[full], observed[full]
     slope = np.sum(e * o) / np.sum(e * e)
