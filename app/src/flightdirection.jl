@@ -8,8 +8,10 @@
 # `SENSING_ORBIT_DIRECTION`, which names its start.
 
 # The datastrip metadata is several megabytes, most of it attitude and quality records after the GPS
-# fixes; this much of its start holds them in every product measured (at most about 650 kB).
+# fixes; this much of its start holds them in every product measured (at most about 650 kB). The tile
+# metadata gives its sensing time within its first kilobyte.
 const S2_DATASTRIP_HEAD_BYTES = 2 << 20
+const S2_TILE_HEAD_BYTES = 16 << 10
 
 _pass(vz::Float64) = vz > 0 ? "ascending" : "descending"
 
@@ -71,9 +73,17 @@ function flight_direction(scene::SceneSource)
     tile = _s2_tile(scene.name)
     ds = _manifest_entry(manifest, r"DATASTRIP/[^\"<>]*/MTD_DS\.xml", scene.name)
     tl = _manifest_entry(manifest, Regex("GRANULE/[^\"<>]*" * tile * "[^\"<>]*/MTD_TL\\.xml"), scene.name)
-    head = ChunkManifests.fetchrange(ChunkManifests.HTTPTransport(), safe * "/" * ds,
-                                     ChunkManifests.ByteRange(UInt64(0), UInt64(S2_DATASTRIP_HEAD_BYTES)))
-    return s2_flight_direction(String(head), _s2_sensing_time(read_text(safe * "/" * tl)))
+    # The two heads are independent reads.
+    dsh = Threads.@spawn _object_head(safe * "/" * ds, S2_DATASTRIP_HEAD_BYTES)
+    tlh = _object_head(safe * "/" * tl, S2_TILE_HEAD_BYTES)
+    return s2_flight_direction(_await(dsh)::String, _s2_sensing_time(tlh))
+end
+
+# The first `n` bytes of an object, or all of it when it is shorter.
+function _object_head(url::String, n::Int)
+    t = ChunkManifests.HTTPTransport()
+    m = min(UInt64(n), ChunkManifests.objectsize(t, url))
+    return String(ChunkManifests.fetchrange(t, url, ChunkManifests.ByteRange(UInt64(0), m)))
 end
 
 function _manifest_entry(manifest::String, pattern::Regex, name::String)

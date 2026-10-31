@@ -36,15 +36,17 @@ options:
   --cache-io MODE      pread (default) or mmap, how the scratch tile caches are accessed
   --filter-tile N      side of the filtered-tile cache's tiles in pixels (default 512)
   --heap-hint-gib N    heap size the collector aims to stay under, GiB (default 12; 0 for none)
-  --orbit-dir DIR      S1: the directory holding each product's precise orbit (.EOF) file; without it the
-                       files are downloaded from the public s1-orbits bucket
+  --orbit-dir DIR      S1: the directory holding each product's orbit (.EOF) file, a precise (POEORB)
+                       before a restituted (RESORB) one; without it the files are downloaded from the
+                       public s1-orbits bucket
   --dem PATH           S1, NL1: a geographic (EPSG:4326) DEM of heights above the WGS84 ellipsoid for the
                        resample's terrain solve, in place of the ITS_LIVE parameter region's DEM plus
                        the EGM2008 geoid
   --tide-model PATH    S1, S1BURST, NL1, NL2: the tide model the offsets over polar floating ice and ocean
-                       are corrected with, for the ocean tide and, from ERA5 sea level pressure, the
-                       inverse barometer, in place of the region's own (CATS2008_v2023 in Antarctica,
-                       Gr1kmTM in Greenland, both in s3://its-live-data/tidal/)
+                       are corrected with, for the ocean tide and, from ERA5 sea level pressure or ECMWF
+                       IFS where ERA5 does not yet reach, the inverse barometer, in place of the region's
+                       own (CATS2008_v2023 in Antarctica, Gr1kmTM in Greenland, both in
+                       s3://its-live-data/tidal/)
   --no-tide-correction leave the offsets over floating ice and ocean as measured
   --subset WKT         S1BURST from SLC zips: a POLYGON or MULTIPOLYGON of longitude-latitude vertices,
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
@@ -99,20 +101,15 @@ struct Arguments
     publish_bucket::String
 end
 
+# Whether a value is HyP3's placeholder for a job parameter the job does not set: HyP3 runs the container
+# with every parameter on the command line and passes an unset one as `None` (#47); an empty value means
+# the same.
+is_unset(v::AbstractString) = (s = strip(v); isempty(s) || s == "None")
+
 # The scenes one value of a `--reference` or `--secondary` list names: separated by white space or commas,
 # with `None`, which HyP3 passes for an empty list, naming none.
 scene_list_items(v::String) =
-    String[String(x) for x in split(v, (' ', '\t', '\n', ','); keepempty = false) if x != "None"]
-
-# The value of an option that takes one, as given or `""` for none. HyP3 runs the container with every job
-# parameter on the command line and passes one the job does not set as `None` (#47); an empty value means
-# the same. For `--subset`, so does an empty geometry (`POLYGON EMPTY`, `MULTIPOLYGON EMPTY`).
-function option_value(option::String, v::String)
-    s = strip(v)
-    (isempty(s) || s == "None") && return ""
-    option == "--subset" && uppercase(s) in ("POLYGON EMPTY", "MULTIPOLYGON EMPTY") && return ""
-    return v
-end
+    String[String(x) for x in split(v, (' ', '\t', '\n', ','); keepempty = false) if !is_unset(x)]
 
 """
     parse_args(args) -> Arguments
@@ -152,8 +149,9 @@ function parse_args(args::Vector{String})
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
             # An unset value leaves the option's default, as if it were not given.
-            if a in ("--dem", "--orbit-dir", "--subset", "--bucket", "--bucket-prefix", "--publish-bucket", "--tide-model")
-                v = option_value(a, v)
+            if is_unset(v) || (a == "--subset" && uppercase(strip(v)) in ("POLYGON EMPTY", "MULTIPOLYGON EMPTY"))
+                i += 2
+                continue
             end
             if a == "--scratch"
                 scratch = v
@@ -163,7 +161,7 @@ function parse_args(args::Vector{String})
                 orbit_dir = v
             elseif a == "--tide-model"
                 # A GDAL virtual path is already what GDAL opens.
-                tide_model = isempty(v) || startswith(v, "/vsi") ? v : gdal_path(v)
+                tide_model = startswith(v, "/vsi") ? v : gdal_path(v)
             elseif a == "--subset"
                 subset = v
             elseif a == "--bucket"

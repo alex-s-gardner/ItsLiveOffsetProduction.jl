@@ -100,8 +100,12 @@ end
 # public Analysis-Ready, Cloud-Optimized copy; the hour is appended as the time index.
 const ERA5_MSL = "ZARR:\"/vsigs/gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.zarr-v3\":/mean_sea_level_pressure:"
 const ERA5_EPOCH = DateTime(1900, 1, 1)
-const ERA5_NLON = 1440
-const ERA5_STEP = 0.25
+
+# The 0.25° global grid ERA5 and the IFS runs share: 1440 columns, 721 rows from 90°N. ERA5's first column is
+# 0°, the IFS runs' 180°W.
+const MSL_NLON = 1440
+const MSL_NLAT = 721
+const MSL_STEP = 0.25
 
 # The inverse-barometer response, metres of sea surface per pascal: 1 / (ρ g) with the sea water density
 # and gravity of Wuite et al. (2026).
@@ -204,7 +208,7 @@ which the archive shows either by having no such index or by an hour of no value
 function era5_pressure_rows(hour::Int, row0::Int, row1::Int)
     p = lock(ERA5_LOCK) do
         try
-            with_dataset(d -> read_window(d, Float32, 0, row0, ERA5_NLON, row1 - row0 + 1), ERA5_MSL * string(hour))
+            with_dataset(d -> read_window(d, Float32, 0, row0, MSL_NLON, row1 - row0 + 1), ERA5_MSL * string(hour))
         catch e
             # An hour past the end of the record is an index the store does not have.
             e isa ErrorException && (m = e.msg; m isa String && occursin("out of bounds", m)) && return nothing
@@ -223,14 +227,14 @@ function _era5_hours(t::DateTime)
 end
 
 # Pressure at `(lon, lat)` from rows starting `row0` rows south of 90°N: bilinear between the grid's
-# points, which lie on whole multiples of 0.25° of longitude from 0° and of latitude from 90°N.
-function _era5_at(p::Matrix{Float32}, row0::Int, lon::Float64, lat::Float64)
-    px = mod(lon, 360.0) / ERA5_STEP
-    py = (90.0 - lat) / ERA5_STEP - row0
+# points, which lie on whole multiples of 0.25° of longitude from `lon0` and of latitude from 90°N.
+function _msl_at(p::Matrix{Float32}, row0::Int, lon0::Float64, lon::Float64, lat::Float64)
+    px = mod(lon - lon0, 360.0) / MSL_STEP
+    py = (90.0 - lat) / MSL_STEP - row0
     i, j = floor(Int, px), floor(Int, py)
     fx, fy = px - i, py - j
-    i0, i1 = mod(i, ERA5_NLON) + 1, mod(i + 1, ERA5_NLON) + 1
-    (0 <= j < size(p, 2) - 1) || throw(ArgumentError("a point lies outside the ERA5 rows read"))
+    i0, i1 = mod(i, MSL_NLON) + 1, mod(i + 1, MSL_NLON) + 1
+    (0 <= j < size(p, 2) - 1) || throw(ArgumentError("a point lies outside the pressure rows read"))
     return (1 - fx) * (1 - fy) * p[i0, j + 1] + fx * (1 - fy) * p[i1, j + 1] +
            (1 - fx) * fy * p[i0, j + 2] + fx * fy * p[i1, j + 2]
 end
@@ -243,23 +247,31 @@ Mean sea level pressure (Pa) at each `(lons[k], lats[k])` at time `t`, linear in
 """
 function era5_pressure(t::DateTime, lons::Vector{Float64}, lats::Vector{Float64})
     h0, f = _era5_hours(t)
-    row0 = clamp(floor(Int, (90.0 - maximum(lats)) / ERA5_STEP) - 1, 0, 720)
-    row1 = clamp(ceil(Int, (90.0 - minimum(lats)) / ERA5_STEP) + 1, 0, 720)
+    row0, row1 = _msl_rows(lats)
     p0 = era5_pressure_rows(h0, row0, row1)
     p0 === nothing && return nothing
     p1 = era5_pressure_rows(h0 + 1, row0, row1)
     p1 === nothing && return nothing
-    return [(1 - f) * _era5_at(p0, row0, lons[k], lats[k]) + f * _era5_at(p1, row0, lons[k], lats[k])
-            for k in eachindex(lons)]
+    return _msl_blend(p0, p1, f, row0, 0.0, lons, lats)
 end
 
+# The rows of the 0.25° grid, zero-based from 90°N, that hold `lats` with one row to spare each way.
+_msl_rows(lats::Vector{Float64}) = (clamp(floor(Int, (90.0 - maximum(lats)) / MSL_STEP) - 1, 0, MSL_NLAT - 1),
+                                    clamp(ceil(Int, (90.0 - minimum(lats)) / MSL_STEP) + 1, 0, MSL_NLAT - 1))
+
+# Pressure at each point, linear in time with weight `f` between fields `p0` and `p1`.
+_msl_blend(p0::Matrix{Float32}, p1::Matrix{Float32}, f::Float64, row0::Int, lon0::Float64, lons::Vector{Float64},
+           lats::Vector{Float64}) =
+    [(1 - f) * _msl_at(p0, row0, lon0, lons[q], lats[q]) + f * _msl_at(p1, row0, lon0, lons[q], lats[q])
+     for q in eachindex(lons)]
+
 # ECMWF's operational IFS forecasts on the public AWS copy of ECMWF open data: four runs a day (00, 06,
-# 12, 18 UTC) from 2024-02-29, on a 0.25° grid of 1440 × 721 points whose first column is 180°W and first
-# row 90°N. A run's `<run>-0h-oper-fc.index` lists each field's byte range in its GRIB2 file, one JSON
-# object per line.
+# 12, 18 UTC) from 2024-02-29, on the 0.25° grid with its first column at 180°W. A run's
+# `<run>-0h-oper-fc.index` lists each field's byte range in its GRIB2 file, one JSON object per line.
 const IFS_DATA = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
 const IFS_FIRST = DateTime(2024, 2, 29)
-const IFS_RUN_HOURS = 6
+const IFS_RUN = Dates.Hour(6)
+const IFS_LON0 = -180.0
 
 """
     ifs_msl_range(index) -> Union{Tuple{Int,Int},Nothing}
@@ -281,8 +293,7 @@ end
 # The URL stem of the IFS run at `t`, a whole multiple of six hours: `<date>/<hh>z/ifs/0p25/oper/
 # <date><hh>0000-0h-oper-fc`.
 function _ifs_run(t::DateTime)
-    d = string(Dates.year(t); pad = 4) * string(Dates.month(t); pad = 2) * string(Dates.day(t); pad = 2)
-    h = string(Dates.hour(t); pad = 2)
+    d, h = yyyymmdd(t), string(Dates.hour(t); pad = 2)
     return IFS_DATA * "/" * d * "/" * h * "z/ifs/0p25/oper/" * d * h * "0000-0h-oper-fc"
 end
 
@@ -295,45 +306,46 @@ published.
 """
 function ifs_pressure_rows(run::DateTime, row0::Int, row1::Int)
     stem = _ifs_run(run)
-    index = try
-        read_text(stem * ".index")
-    catch e
-        # A run not (yet) published is an object the bucket does not have.
-        e isa ErrorException && (m = e.msg; m isa String && startswith(m, "HTTP 404 ")) && return nothing
-        rethrow()
+    status, body = ChunkManifests.http_request(stem * ".index")
+    # The bucket answers a burst of requests with 503 Slow Down.
+    for attempt in 1:5
+        status == 503 || break
+        sleep(0.5 * 2.0^attempt)
+        status, body = ChunkManifests.http_request(stem * ".index")
     end
-    r = ifs_msl_range(index)
+    # A run not (yet) published is an object the bucket does not have.
+    status == 404 && return nothing
+    status == 200 || throw(ErrorException("HTTP " * string(status) * " fetching " * stem * ".index"))
+    r = ifs_msl_range(String(body))
     r === nothing && throw(ArgumentError(stem * ".index lists no surface mean sea level pressure"))
     path = "/vsisubfile/" * string(r[1]) * "_" * string(r[2]) * ",/vsicurl/" * stem * ".grib2"
-    p = with_dataset(d -> read_window(d, Float32, 0, row0, ERA5_NLON, row1 - row0 + 1), path)
+    p = with_dataset(d -> read_window(d, Float32, 0, row0, MSL_NLON, row1 - row0 + 1), path)
     any(isnan, p) && return nothing
     return p
 end
 
 """
-    ifs_pressure(t, lons, lats) -> Union{Vector{Float64},Nothing}
+    ifs_pressure(ts, lons, lats) -> Union{Vector{Vector{Float64}},Nothing}
 
-Mean sea level pressure (Pa) at each `(lons[k], lats[k])` at time `t` from the IFS runs' initial states,
-linear in time between the two runs that bracket `t`; `nothing` before 2024-02-29 or when either run is not
-published.
+Mean sea level pressure (Pa) at each `(lons[k], lats[k])` at each time of `ts` from the IFS runs' initial
+states, linear in time between the two runs that bracket it; `nothing` when a time is before 2024-02-29 or
+a run it needs is not published. The runs are read at once.
 """
-function ifs_pressure(t::DateTime, lons::Vector{Float64}, lats::Vector{Float64})
-    t >= IFS_FIRST || return nothing
-    ms = Dates.value(t - IFS_FIRST)
-    step = IFS_RUN_HOURS * 3_600_000
-    k = fld(ms, step)
-    f = (ms - k * step) / step
-    r0 = IFS_FIRST + Dates.Millisecond(k * step)
-    row0 = clamp(floor(Int, (90.0 - maximum(lats)) / ERA5_STEP) - 1, 0, 720)
-    row1 = clamp(ceil(Int, (90.0 - minimum(lats)) / ERA5_STEP) + 1, 0, 720)
-    p0 = ifs_pressure_rows(r0, row0, row1)
-    p0 === nothing && return nothing
-    p1 = ifs_pressure_rows(r0 + Dates.Hour(IFS_RUN_HOURS), row0, row1)
-    p1 === nothing && return nothing
-    # The grid's first column is 180°W; `_era5_at` reads from 0°, so shift the longitude by half a turn.
-    return [(1 - f) * _era5_at(p0, row0, lons[q] + 180.0, lats[q]) + f * _era5_at(p1, row0, lons[q] + 180.0, lats[q])
-            for q in eachindex(lons)]
+function ifs_pressure(ts::Vector{DateTime}, lons::Vector{Float64}, lats::Vector{Float64})
+    all(>=(IFS_FIRST), ts) || return nothing
+    row0, row1 = _msl_rows(lats)
+    r0 = [floor(t, IFS_RUN) for t in ts]
+    runs = unique!(sort!([r0; r0 .+ IFS_RUN]))
+    tasks = [Threads.@spawn(ifs_pressure_rows(r, row0, row1)) for r in runs]
+    fields = Union{Matrix{Float32},Nothing}[_await(t)::Union{Matrix{Float32},Nothing} for t in tasks]
+    any(isnothing, fields) && return nothing
+    field(r) = something(fields[searchsortedfirst(runs, r)])
+    return [_msl_blend(field(r0[k]), field(r0[k] + IFS_RUN), Dates.value(ts[k] - r0[k]) / Dates.value(Dates.Millisecond(IFS_RUN)),
+                       row0, IFS_LON0, lons, lats) for k in eachindex(ts)]
 end
+
+ifs_pressure(t::DateTime, lons::Vector{Float64}, lats::Vector{Float64}) =
+    (p = ifs_pressure([t], lons, lats); p === nothing ? nothing : only(p))
 
 """
     PressureSource
@@ -350,12 +362,12 @@ Mean sea level pressure at both scene times from one source for both, so their d
 models: ERA5 when it reaches both, else the IFS runs, else none.
 """
 function pair_pressure(t1::DateTime, t2::DateTime, lons::Vector{Float64}, lats::Vector{Float64})
-    p1 = era5_pressure(t1, lons, lats)
-    p2 = p1 === nothing ? nothing : era5_pressure(t2, lons, lats)
-    (p1 !== nothing && p2 !== nothing) && return p1, p2, ERA5
-    q1 = ifs_pressure(t1, lons, lats)
-    q2 = q1 === nothing ? nothing : ifs_pressure(t2, lons, lats)
-    (q1 !== nothing && q2 !== nothing) && return q1, q2, IFS
+    # The later scene first: when ERA5 does not reach it, the earlier one need not be read.
+    p2 = era5_pressure(t2, lons, lats)
+    p1 = p2 === nothing ? nothing : era5_pressure(t1, lons, lats)
+    p1 === nothing || return p1, something(p2), ERA5
+    q = ifs_pressure([t1, t2], lons, lats)
+    q === nothing || return q[1], q[2], IFS
     return Float64[], Float64[], NONE
 end
 

@@ -7,7 +7,7 @@ using AutoriftItsLiveProduction: TideConstants, tide_point, tide_height, TIDE_BA
                                  GR1KM_PROJECTION, CATS_MODEL, GR1KM_MODEL, BEDMACHINE_MASK, Region,
                                  tide_setting, tide_constants, covers, mask_window,
                                  epsg_wkt as A_epsg_wkt, ifs_msl_range, _ifs_run,
-                                 _era5_hours, _era5_at, _interp_linear, _hour_string
+                                 _era5_hours, _msl_at, _interp_linear, _hour_string
 import ImagePairGeometry as IPG
 import GDAL
 
@@ -162,10 +162,10 @@ end
     # Rows from 60°S, every longitude: pressure = 1000 lon + lat index, so bilinear is exact.
     p = Float32[1000 * i + j for i in 0:1439, j in 0:9]
     row0 = 600
-    @test _era5_at(p, row0, 10.0, -60.5) ≈ 1000 * 40 + 2
+    @test _msl_at(p, row0, 0.0, 10.0, -60.5) ≈ 1000 * 40 + 2
     # West longitudes wrap to the grid's 0–360°, and the last column interpolates with the first.
-    @test _era5_at(p, row0, -0.125, -60.0) ≈ (1000 * 1439 + 0) / 2
-    @test_throws "outside the ERA5 rows" _era5_at(p, row0, 0.0, -75.0)
+    @test _msl_at(p, row0, 0.0, -0.125, -60.0) ≈ (1000 * 1439 + 0) / 2
+    @test_throws "outside the pressure rows" _msl_at(p, row0, 0.0, 0.0, -75.0)
     @test _hour_string(DateTime(2026, 10, 19, 7) + Minute(59)) == "2026-10-19T07"
 end
 

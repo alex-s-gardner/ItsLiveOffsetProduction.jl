@@ -72,6 +72,10 @@ end
         @test (a.options.dem, a.options.orbit_dir, a.options.tide, a.options.tide_model) ==
               (plain.options.dem, plain.options.orbit_dir, true, "")
     end
+    # So does every other option that takes a value, keeping its default.
+    a = parse_args([L8A, L8B, "--scratch", "None", "--cache-io", "None", "--filter-tile", "None", "--heap-hint-gib", "None"])
+    @test (a.options.scratch, a.options.cache_io, a.options.filter_tile, a.heap_hint_gib) ==
+          (plain.options.scratch, plain.options.cache_io, plain.options.filter_tile, plain.heap_hint_gib)
     for empty in ("POLYGON EMPTY", "MULTIPOLYGON EMPTY", "polygon empty")
         @test parse_args([L8A, L8B, "--subset", empty]).subset == ""
     end

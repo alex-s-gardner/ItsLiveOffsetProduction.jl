@@ -200,7 +200,10 @@ function parse_utc(s::AbstractString)
                     parse(Int, hms[2]), parse(Int, sec[1]), ms)
 end
 
-# `YYYYMMDD`, as a scene name carries its date.
+# `YYYYMMDD`, as a scene name or an object key carries a date: field by field, as `Dates.format` is not
+# available to a trimmed program.
+yyyymmdd(t::DateTime) = string(Dates.year(t); pad = 4) * string(Dates.month(t); pad = 2) * string(Dates.day(t); pad = 2)
+
 function parse_yyyymmdd(s::AbstractString)
     length(s) == 8 || throw(ArgumentError("not a YYYYMMDD date: " * String(s)))
     return Date(parse(Int, s[1:4]), parse(Int, s[5:6]), parse(Int, s[7:8]))
