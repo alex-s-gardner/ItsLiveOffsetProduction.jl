@@ -1,5 +1,8 @@
-# Sentinel-1 orbit files: a product carries no state vectors of its own, so its precise orbit (POEORB) is
-# found by acquisition time in the public `s1-orbits` bucket, a mirror of the Copernicus orbit products.
+# Sentinel-1 orbit files: a product carries no state vectors of its own, so its orbit is found by acquisition
+# time in the public `s1-orbits` bucket, a mirror of the Copernicus orbit products. The precise orbit
+# (POEORB, about 5 cm) is published about 20 days after acquisition; until then the restituted orbit (RESORB,
+# about 10 cm, published within hours) is used. Either is well inside a pixel for feature-tracked offsets,
+# whose range pixel is 2.3 m.
 
 const S1_ORBITS = "https://s1-orbits.s3.us-west-2.amazonaws.com"
 
@@ -38,20 +41,44 @@ end
 """
     s1_orbit_url(name) -> String
 
-The URL of the precise orbit file for the Sentinel-1 product `name`: of the `AUX_POEORB` files of its
-mission whose validity spans the sensing interval with a minute to spare at each end, the most recently
-created. The mission's files are listed a page at a time, a thousand keys per request.
+The URL of the orbit file for the Sentinel-1 product `name`: its precise orbit (`AUX_POEORB`) when one is
+published, else its restituted orbit (`AUX_RESORB`); of the files of its mission and kind whose validity
+spans the sensing interval with a minute to spare at each end, the most recently created.
 """
 function s1_orbit_url(name::String)
+    for kind in ("POEORB", "RESORB")
+        url = _s1_orbit_url(name, kind)
+        isempty(url) || return url
+    end
+    throw(ArgumentError("s1-orbits holds no precise or restituted orbit spanning " * name))
+end
+
+"""
+    s1_orbit_kind(path) -> String
+
+`"POEORB"` or `"RESORB"`, from an orbit file's name.
+"""
+function s1_orbit_kind(path::AbstractString)
+    occursin("_AUX_POEORB_", path) && return "POEORB"
+    occursin("_AUX_RESORB_", path) && return "RESORB"
+    throw(ArgumentError(String(basename(path)) * " is neither a precise (POEORB) nor a restituted (RESORB) orbit file"))
+end
+
+# The URL of the newest `kind` orbit file spanning `name`'s sensing interval, "" when there is none. The
+# mission's files are listed a page at a time, a thousand keys per request, from the day the sensing starts:
+# a file's name starts with its creation time, which follows the end of its validity, so a file spanning
+# the interval was created after the sensing started.
+function _s1_orbit_url(name::String, kind::String)
     mission, start, stop = s1_name_times(name)
-    prefix = "AUX_POEORB/" * mission * "_OPER_AUX_POEORB_OPOD_"
+    prefix = "AUX_" * kind * "/" * mission * "_OPER_AUX_" * kind * "_OPOD_"
     want0, want1 = start - Dates.Minute(1), stop + Dates.Minute(1)
     best = ""
     best_created = DateTime(0)
     token = ""
+    after = prefix * yyyymmdd(start)
     t = ChunkManifests.HTTPTransport()
     while true
-        url = S1_ORBITS * "/?list-type=2&prefix=" * _query_escape(prefix) *
+        url = S1_ORBITS * "/?list-type=2&prefix=" * _query_escape(prefix) * "&start-after=" * _query_escape(after) *
               (isempty(token) ? "" : "&continuation-token=" * _query_escape(token))
         page = String(ChunkManifests.fetchall(t, url))
         for k in eachmatch(r"<Key>([^<]+)</Key>", page)
@@ -68,14 +95,13 @@ function s1_orbit_url(name::String)
         n === nothing && break
         token = String(something(n.captures[1]))
     end
-    isempty(best) && throw(ArgumentError("s1-orbits holds no precise orbit spanning " * name))
-    return S1_ORBITS * "/" * best
+    return isempty(best) ? "" : S1_ORBITS * "/" * best
 end
 
 """
     fetch_s1_orbit(name, dir) -> String
 
-The precise orbit file for product `name`, downloaded into `dir`; its path.
+The orbit file for product `name` ([`s1_orbit_url`](@ref)), downloaded into `dir`; its path.
 """
 function fetch_s1_orbit(name::String, dir::String)
     url = s1_orbit_url(name)

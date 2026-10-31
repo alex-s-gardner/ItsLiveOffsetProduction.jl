@@ -6,3 +6,4 @@ Manifest.toml
 /tools/golden/results/
 /app/build/
 /tools/benchmark/pairs/*_check.tsv
+__pycache__/

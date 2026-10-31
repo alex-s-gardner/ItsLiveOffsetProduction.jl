@@ -26,13 +26,16 @@ end
 """
     s1_orbit_file(name, orbit_dir, scratch) -> String
 
-The precise orbit file for product `name`: the one in `orbit_dir` whose validity covers the product's
-sensing start, when `orbit_dir` is given, else the one [`fetch_s1_orbit`](@ref) downloads into `scratch`.
+The orbit file for product `name`: the one in `orbit_dir` whose validity covers the product's sensing start,
+a precise orbit (POEORB) before a restituted one (RESORB), when `orbit_dir` is given; else the one
+[`fetch_s1_orbit`](@ref) downloads into `scratch`.
 """
 function s1_orbit_file(name::String, orbit_dir::String, scratch::String)
     isempty(orbit_dir) && return fetch_s1_orbit(name, scratch)
     _, start, _ = s1_name_times(name)
-    for f in sort(readdir(orbit_dir))
+    # A precise orbit before a restituted one, whatever the names' order.
+    files = sort(readdir(orbit_dir); by = f -> (!occursin("_AUX_POEORB_", f), f))
+    for f in files
         m = match(r"_V(\d{8}T\d{6})_(\d{8}T\d{6})\.EOF$", f)
         m === nothing && continue
         a, b = _ccsds(String(something(m.captures[1]))), _ccsds(String(something(m.captures[2])))
@@ -623,7 +626,8 @@ end
 
 `IMG_INFO_DICT` for a Sentinel-1 pair: the satellites, orbits, datatakes and product ids out of the two
 product ids (`S1A_IW_SLC__1SSH_<start>_<stop>_<orbit>_<datatake>_<id>`), the pass directions out of the
-annotations, and the acquisition times as the two mosaics' sensing starts.
+annotations, the acquisition times as the two mosaics' sensing starts, and which orbit each scene was
+geolocated with (`orbit_type_img1/2`, `POEORB` or `RESORB`, [`s1_orbit_kind`](@ref)).
 """
 function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::Float64)
     rp, sp = s.early_product, s.late_product
@@ -634,7 +638,8 @@ function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::
     f1, f2 = split(n1, '_'), split(n2, '_')
     (length(f1) == 10 && length(f2) == 10) || throw(ArgumentError(
         n1 * " or " * n2 * " is not a Sentinel-1 product id of ten underscore-delimited fields"))
-    # Sized for its twelve entries, so the attributes iterate in the order a twelve-pair `Dict` gives.
+    # Sized for the twelve entries the reference writes, so they iterate in the order a twelve-pair `Dict`
+    # gives; the orbit types follow.
     extra = sizehint!(Dict{String,AttrValue}(), 12)
     extra["id_img1"] = n1
     extra["id_img2"] = n2
@@ -648,6 +653,8 @@ function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::
     extra["mission_data_take_ID_img2"] = String(f2[9])
     extra["product_unique_ID_img1"] = String(f1[10])
     extra["product_unique_ID_img2"] = String(f2[10])
+    extra["orbit_type_img1"] = s1_orbit_kind(rp.orbit_path)
+    extra["orbit_type_img2"] = s1_orbit_kind(sp.orbit_path)
     return ItsLiveOffsetProduction.ImagePairInfo(s1_datetime(t1), s1_datetime(t2), "S", "S",
                                                  String(f1[1][2:end]), String(f2[1][2:end]), roi_valid,
                                                  round(lat; digits = 2), round(lon; digits = 2), extra)
