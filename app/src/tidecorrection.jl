@@ -1,6 +1,7 @@
 # The vertical motion of floating ice and the ocean between a radar pair's two acquisitions, removed from its
-# offsets: the ocean tide and the inverse-barometer response to ERA5 mean sea level pressure, after Wuite et
-# al. (2026, Remote Sens. Environ. 332, 115092, eq. 10). Each polar region has its own tide model and masks
+# offsets: the ocean tide and the inverse-barometer response to mean sea level pressure, after Wuite et al.
+# (2026, Remote Sens. Environ. 332, 115092, eq. 10). The pressure is ERA5's where ERA5 reaches both scenes,
+# else the ECMWF IFS operational runs', which reach the present ([`pair_pressure`](@ref)). Each polar region has its own tide model and masks
 # ([`tide_setting`](@ref)): in Antarctica CATS2008_v2023 with its grounding-zone flexure on the ITS_LIVE
 # floating-ice and ocean masks, in Greenland Gr1kmTM v1 on BedMachine Greenland v7's floating ice and ocean.
 #
@@ -252,6 +253,112 @@ function era5_pressure(t::DateTime, lons::Vector{Float64}, lats::Vector{Float64}
             for k in eachindex(lons)]
 end
 
+# ECMWF's operational IFS forecasts on the public AWS copy of ECMWF open data: four runs a day (00, 06,
+# 12, 18 UTC) from 2024-02-29, on a 0.25° grid of 1440 × 721 points whose first column is 180°W and first
+# row 90°N. A run's `<run>-0h-oper-fc.index` lists each field's byte range in its GRIB2 file, one JSON
+# object per line.
+const IFS_DATA = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+const IFS_FIRST = DateTime(2024, 2, 29)
+const IFS_RUN_HOURS = 6
+
+"""
+    ifs_msl_range(index) -> Union{Tuple{Int,Int},Nothing}
+
+The byte offset and length of the surface mean sea level pressure field (`"param": "msl"`, `"levtype":
+"sfc"`) in an IFS run's index, `nothing` when it lists none.
+"""
+function ifs_msl_range(index::String)
+    for line in eachline(IOBuffer(index))
+        (occursin("\"param\": \"msl\"", line) && occursin("\"levtype\": \"sfc\"", line)) || continue
+        o = match(r"\"_offset\": (\d+)", line)
+        l = match(r"\"_length\": (\d+)", line)
+        (o === nothing || l === nothing) && continue
+        return parse(Int, o.captures[1]), parse(Int, l.captures[1])
+    end
+    return nothing
+end
+
+# The URL stem of the IFS run at `t`, a whole multiple of six hours: `<date>/<hh>z/ifs/0p25/oper/
+# <date><hh>0000-0h-oper-fc`.
+function _ifs_run(t::DateTime)
+    d = string(Dates.year(t); pad = 4) * string(Dates.month(t); pad = 2) * string(Dates.day(t); pad = 2)
+    h = string(Dates.hour(t); pad = 2)
+    return IFS_DATA * "/" * d * "/" * h * "z/ifs/0p25/oper/" * d * h * "0000-0h-oper-fc"
+end
+
+"""
+    ifs_pressure_rows(run, row0, row1) -> Union{Matrix{Float32},Nothing}
+
+Mean sea level pressure (Pa) of the IFS run at `run` (a whole multiple of six hours, UTC), rows `row0`–`row1`
+(zero-based from 90°N) of every longitude, indexed `[lon, lat]` from 180°W; `nothing` when the run is not
+published.
+"""
+function ifs_pressure_rows(run::DateTime, row0::Int, row1::Int)
+    stem = _ifs_run(run)
+    index = try
+        read_text(stem * ".index")
+    catch e
+        # A run not (yet) published is an object the bucket does not have.
+        e isa ErrorException && (m = e.msg; m isa String && startswith(m, "HTTP 404 ")) && return nothing
+        rethrow()
+    end
+    r = ifs_msl_range(index)
+    r === nothing && throw(ArgumentError(stem * ".index lists no surface mean sea level pressure"))
+    path = "/vsisubfile/" * string(r[1]) * "_" * string(r[2]) * ",/vsicurl/" * stem * ".grib2"
+    p = with_dataset(d -> read_window(d, Float32, 0, row0, ERA5_NLON, row1 - row0 + 1), path)
+    any(isnan, p) && return nothing
+    return p
+end
+
+"""
+    ifs_pressure(t, lons, lats) -> Union{Vector{Float64},Nothing}
+
+Mean sea level pressure (Pa) at each `(lons[k], lats[k])` at time `t` from the IFS runs' initial states,
+linear in time between the two runs that bracket `t`; `nothing` before 2024-02-29 or when either run is not
+published.
+"""
+function ifs_pressure(t::DateTime, lons::Vector{Float64}, lats::Vector{Float64})
+    t >= IFS_FIRST || return nothing
+    ms = Dates.value(t - IFS_FIRST)
+    step = IFS_RUN_HOURS * 3_600_000
+    k = fld(ms, step)
+    f = (ms - k * step) / step
+    r0 = IFS_FIRST + Dates.Millisecond(k * step)
+    row0 = clamp(floor(Int, (90.0 - maximum(lats)) / ERA5_STEP) - 1, 0, 720)
+    row1 = clamp(ceil(Int, (90.0 - minimum(lats)) / ERA5_STEP) + 1, 0, 720)
+    p0 = ifs_pressure_rows(r0, row0, row1)
+    p0 === nothing && return nothing
+    p1 = ifs_pressure_rows(r0 + Dates.Hour(IFS_RUN_HOURS), row0, row1)
+    p1 === nothing && return nothing
+    # The grid's first column is 180°W; `_era5_at` reads from 0°, so shift the longitude by half a turn.
+    return [(1 - f) * _era5_at(p0, row0, lons[q] + 180.0, lats[q]) + f * _era5_at(p1, row0, lons[q] + 180.0, lats[q])
+            for q in eachindex(lons)]
+end
+
+"""
+    PressureSource
+
+Where a pair's sea level pressure came from: `ERA5`, `IFS` when ERA5 does not yet reach the pair, or `NONE`
+when neither does.
+"""
+@enum PressureSource ERA5 IFS NONE
+
+"""
+    pair_pressure(t1, t2, lons, lats) -> (p1, p2, source)
+
+Mean sea level pressure at both scene times from one source for both, so their difference never mixes
+models: ERA5 when it reaches both, else the IFS runs, else none.
+"""
+function pair_pressure(t1::DateTime, t2::DateTime, lons::Vector{Float64}, lats::Vector{Float64})
+    p1 = era5_pressure(t1, lons, lats)
+    p2 = p1 === nothing ? nothing : era5_pressure(t2, lons, lats)
+    (p1 !== nothing && p2 !== nothing) && return p1, p2, ERA5
+    q1 = ifs_pressure(t1, lons, lats)
+    q2 = q1 === nothing ? nothing : ifs_pressure(t2, lons, lats)
+    (q1 !== nothing && q2 !== nothing) && return q1, q2, IFS
+    return Float64[], Float64[], NONE
+end
+
 """
     range_offset_correction(dz, cosθ, dr) -> Float64
 
@@ -475,7 +582,7 @@ end
     VerticalMotion
 
 The tapered vertical motion `dz` (metres, late minus early) of the points `idx` a tide model covers, their
-longitudes `lons` and latitudes `lats` (degrees), whether the inverse barometer was included (`ib`), and how
+longitudes `lons` and latitudes `lats` (degrees), the source of the inverse barometer (`ib`), and how
 many of the points asked for the model has no constants for (`uncovered`).
 """
 struct VerticalMotion
@@ -483,7 +590,7 @@ struct VerticalMotion
     dz::Vector{Float64}
     lons::Vector{Float64}
     lats::Vector{Float64}
-    ib::Bool
+    ib::PressureSource
     uncovered::Int
 end
 
@@ -520,11 +627,9 @@ function vertical_motion(ts::TideSetting, idx::Vector{CartesianIndex{2}}, w::Mat
     isempty(kidx) && throw(ArgumentError(
         "the tide model " * ts.model * " has no constants at any of the " * string(n) * " floating-ice and " *
         "ocean points; it does not cover this region"))
-    p1 = era5_pressure(t1, klon, klat)
-    p2 = p1 === nothing ? nothing : era5_pressure(t2, klon, klat)
-    ib = p1 !== nothing && p2 !== nothing
+    p1, p2, ib = pair_pressure(t1, t2, klon, klat)
     dz = tide .* w[kidx]
-    if ib
+    if ib != NONE
         dz .-= flex .* (p2 .- p1) .* IB_M_PER_PA .* w[kidx]
     end
     return VerticalMotion(kidx, dz, klon, klat, ib, n - length(kidx))
@@ -536,14 +641,17 @@ function _record!(info::ItsLiveOffsetProduction.ImagePairInfo, ts::TideSetting, 
     info.extra["tide_correction"] = ts.model_description * ", tapered to zero over " * km * " km at the " *
                                     "grounding line, on " * ts.mask_description * ", removed from the " * removed_from
     mm = string(round(-100_000 * IB_M_PER_PA; digits = 1))
-    info.extra["inverse_barometer_correction"] = v.ib ?
-        "ERA5 mean sea level pressure (ARCO-ERA5), " * mm * " mm/hPa, with the tide" :
-        "none: ERA5 does not yet reach " * _hour_string(t)
+    info.extra["inverse_barometer_correction"] =
+        v.ib == ERA5 ? "ERA5 mean sea level pressure (ARCO-ERA5), " * mm * " mm/hPa, with the tide" :
+        v.ib == IFS ? "ECMWF IFS operational analysis mean sea level pressure (ECMWF open data, CC BY 4.0), " * mm *
+                      " mm/hPa, with the tide; ERA5 does not yet reach " * _hour_string(t) :
+        "none: neither ERA5 nor the IFS runs reach " * _hour_string(t)
     info.extra["tide_correction_uncovered"] = v.uncovered
     m = round(_median(v.dz); digits = 3)
     info.extra["tide_correction_dz_median"] = m
     say("tide       " * string(length(v.dz)) * " floating-ice and ocean points, median dz " * string(m) * " m" *
-        (v.ib ? "" : ", no inverse barometer: ERA5 does not reach the pair") *
+        (v.ib == ERA5 ? "" : v.ib == IFS ? ", inverse barometer from IFS: ERA5 does not reach the pair" :
+         ", no inverse barometer: neither ERA5 nor IFS reaches the pair") *
         (v.uncovered == 0 ? "" : "; " * string(v.uncovered) * " outside the tide model, left as measured"))
     return nothing
 end

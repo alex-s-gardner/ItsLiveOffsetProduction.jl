@@ -9,10 +9,11 @@
 # against xarray's interpolation of the same ERA5 store.
 
 using Test
-using Dates: DateTime, Day, UTC, now
+using Dates: DateTime, Day, Hour, UTC, now
 using JSON3
 using AutoriftItsLiveProduction: CATS_MODEL, GR1KM_MODEL, BEDMACHINE_MASK, CATS_PROJECTION, GR1KM_PROJECTION,
                                  TIDE_BANDS, tide_constants, tide_point, tide_height, era5_pressure,
+                                 ifs_pressure, pair_pressure, ERA5, IFS,
                                  mask_window, gdal_network_setup, with_dataset, band_count, band_description
 import ImagePairGeometry as IPG
 
@@ -65,4 +66,24 @@ const ERA5_MAX_LAG_DAYS = 10
 
 @testset "ERA5 reaches within $(ERA5_MAX_LAG_DAYS) days of now" begin
     @test era5_pressure(now(UTC) - Day(ERA5_MAX_LAG_DAYS), [0.0], [-80.0]) !== nothing
+end
+
+@testset "IFS pressure matches GDAL's bilinear read of the same runs" begin
+    # `gdallocationinfo -wgs84 -r bilinear` on the runs' surface msl records, 2026-10-24 00Z and 06Z;
+    # 01:30 is a quarter of the way from the first to the second.
+    lons, lats = [-20.9, -60.9], [79.53, 80.82]
+    p00, p06 = [101304.3505, 101108.1905], [100707.3115, 101191.9835]
+    @test ifs_pressure(DateTime(2026, 10, 24), lons, lats) ≈ p00 rtol = 1.0e-7
+    @test ifs_pressure(DateTime(2026, 10, 24, 1, 30), lons, lats) ≈ 0.75 .* p00 .+ 0.25 .* p06 rtol = 1.0e-7
+    @test ifs_pressure(DateTime(2020, 1, 1), lons, lats) === nothing      # before the archive
+    @test ifs_pressure(DateTime(2099, 1, 1), lons, lats) === nothing      # not yet published
+end
+
+# IFS is the inverse barometer of every pair newer than ERA5: a run more than a day old not yet published,
+# or a pair older than ERA5's end not taking ERA5, is caught here.
+@testset "a pair takes ERA5 where ERA5 reaches it and IFS up to the last day" begin
+    lons, lats = [-20.9], [79.53]
+    @test last(pair_pressure(DateTime(2025, 1, 1), DateTime(2025, 1, 13), lons, lats)) == ERA5
+    t = floor(now(UTC), Hour(6)) - Day(1)
+    @test last(pair_pressure(t - Day(12), t, lons, lats)) == IFS
 end
