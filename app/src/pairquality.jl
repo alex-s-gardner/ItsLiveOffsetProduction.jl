@@ -26,7 +26,8 @@ end
     PairQuality
 
 The two images over the same sample windows, and `db` the late image's brightness relative to the early
-one: `20 log10` of the ratio of medians, the same in amplitude and in digital number.
+one: `20 log10` of the ratio of medians, the same in amplitude and in digital number. NaN unless both
+medians are positive, as a Wallis-filtered scene's need not be.
 """
 struct PairQuality
     early::ImageSample
@@ -64,8 +65,11 @@ function pair_quality(img::Imagery)
     corners = [(clamp(round(Int, fr * nr / 4 - w / 2), 1, nr - w + 1), clamp(round(Int, fc * nc / 4 - w / 2), 1, nc - w + 1))
                for fr in (1, 2, 3) for fc in (1, 2, 3)]
     e, l = _sample(img.early, corners, w), _sample(img.late, corners, w)
-    return PairQuality(e, l, 20 * log10(l.median / e.median))
+    return PairQuality(e, l, _db(e.median, l.median))
 end
+
+# The brightness difference, which only an amplitude has; see `PairQuality`.
+_db(early::Float64, late::Float64) = early > 0 && late > 0 ? 20 * log10(late / early) : NaN
 
 # The median of a non-empty vector holding no NaN.
 _median(v::Vector{Float64}) = (s = sort(v); m = length(s); isodd(m) ? s[(m + 1) ÷ 2] : (s[m ÷ 2] + s[m ÷ 2 + 1]) / 2)
