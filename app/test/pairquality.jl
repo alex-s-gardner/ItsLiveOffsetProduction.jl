@@ -38,6 +38,12 @@ tiles(a, dir) = fill_tiles!(TileCache(a; tile = 1024, dir, io = :pread))
     @test q.db ≈ -34 atol = 1
     @test isempty(quality_warnings(q))
 
+    # A Wallis-filtered scene is centred on zero, so its median can be negative and has no brightness in dB.
+    centred = Imagery(e, tiles(speckle(rng, s) .- 10, dir), falses(1, 1))
+    q = pair_quality(centred)
+    @test q.late.median < 0 && isnan(q.db)
+    @test isempty(quality_warnings(q))
+
     # An image of no data, and one of a single value, leave a chip nothing to match.
     empty = Imagery(e, tiles(zeros(Float32, size(s)), dir), falses(1, 1))
     q = pair_quality(empty)
