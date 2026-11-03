@@ -299,6 +299,13 @@ end
                                                "geometric_correction" => "a fit"))["img_pair_info"].attrib
     @test (corrected["geometric_correction_flag"], corrected["geometric_correction"], corrected["tide_correction_flag"]) ==
           (1, "a fit", 0)
+    # The pass as the datacubes record it: 1 ascending, 0 descending, 255 where the product has none.
+    pass = written("L", "8"; extra = Dict("flight_direction_img1" => "ascending",
+                                          "flight_direction_img2" => "descending"))["img_pair_info"].attrib
+    @test (pass["ascending_img1"], pass["ascending_img2"]) === (0x01, 0x00)
+    @test s1["img_pair_info"].attrib["ascending_img1"] === 0xff
+    @test_throws "flight_direction_img1 is \"north\", not \"ascending\" or \"descending\"" written(
+        "L", "8"; extra = Dict("flight_direction_img1" => "north"))
     # A mission without a stable-shift decision is refused rather than given a default.
     @test_throws "mission code S with satellite 3A is not a known mission" written("S", "3A")
     for (name, shift) in (("vx", median(dx)), ("vy", median(dy)), ("vr", median(dx)), ("va", median(dy)))

@@ -728,11 +728,11 @@ _format_created(dt::DateTime) =
 # real capture, since only an optical case has been checked so far.
 _format_date_stripped(dt::DateTime) = String(rstrip(_format_date(dt), '0'))
 
-# Entry by entry rather than through `Dict(pairs...)`, whose fifteen differently typed pairs are a
+# Entry by entry rather than through `Dict(pairs...)`, whose seventeen differently typed pairs are a
 # `Vararg{Any}` call a `--trim`med program cannot make. Sized first, as that constructor sizes it, so
 # the attributes iterate — and are written — in the same order.
 function _img_pair_info_attrs(info::ImagePairInfo, date_dt::Float64, date_center_str::String)
-    d = sizehint!(Dict{String,AttrValue}(), 15)
+    d = sizehint!(Dict{String,AttrValue}(), 17)
     d["acquisition_date_img1"] = _format_date_stripped(info.acquisition_date_img1)
     d["acquisition_date_img2"] = _format_date_stripped(info.acquisition_date_img2)
     d["mission_img1"] = info.mission_img1
@@ -751,7 +751,22 @@ function _img_pair_info_attrs(info::ImagePairInfo, date_dt::Float64, date_center
     d["tide_correction_flag"] = Int64(0)
     d["geometric_correction_flag"] = Int64(0)
     merge!(d, info.extra)
+    d["ascending_img1"] = _ascending(info.extra, "flight_direction_img1")
+    d["ascending_img2"] = _ascending(info.extra, "flight_direction_img2")
     return d
+end
+
+# `ascending_img1`/`ascending_img2`: 1 ascending, 0 descending, 255 when the product records no flight
+# direction — the datacubes' `uint8` convention, where 255 is the missing value (see
+# nasa-jpl/its_live_production#49).
+function _ascending(extra::Dict{String,AttrValue}, key::String)
+    haskey(extra, key) || return 0xff
+    v = extra[key]
+    v == "ascending" && return 0x01
+    v == "descending" && return 0x00
+    # Quoted by hand: `repr` of an `AttrValue` reaches `show(::Vector{UInt8})`, which `--trim` cannot compile.
+    shown = v isa String ? "\"" * v * "\"" : "not text"
+    throw(ArgumentError(key * " is " * shown * ", not \"ascending\" or \"descending\""))
 end
 
 # ---------------------------------------------------------------------------
