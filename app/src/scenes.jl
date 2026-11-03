@@ -5,11 +5,12 @@
     scene_band(platform) -> Symbol
 
 Which band the reference correlates: `:pan` for Landsat 7/8/9 and Sentinel-2, `:green` for Landsat 4/5
-(`process.py:77-89`).
+(`process.py:77-89`), and `:nir` — VNIR band 3N — for ASTER.
 """
 function scene_band(platform::AbstractString)
     platform in ("L4", "L5") && return :green
     platform in ("L7", "L8", "L9", "S2") && return :pan
+    platform == "AST" && return :nir
     throw(ArgumentError("no band rule for platform \"" * String(platform) * "\""))
 end
 
@@ -41,6 +42,7 @@ function scene_date(platform::AbstractString, name::AbstractString)
     startswith(platform, "NISAR") && return String(parts[12][1:8])
     # Sentinel-1: `S1A_IW_SLC__1SSH_20150828T162412_…`, field 6 after the empty one `SLC__` makes.
     startswith(platform, "S1") && return String(parts[6][1:8])
+    platform == "AST" && return aster_date(name)
     throw(ArgumentError("no date rule for platform \"" * String(platform) * "\""))
 end
 

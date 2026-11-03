@@ -29,6 +29,8 @@ end
 function _input_scene_name(input::String)
     m = match(S2_SAFE, input)
     m === nothing || return String(something(m.captures[1]))
+    m = match(ASTER_BAND_FILE, basename(input))
+    m === nothing || return String(something(m.captures[1]))
     return String(first(split(basename(rstrip(input, '/')), '.')))
 end
 
@@ -114,6 +116,7 @@ function opendata_platform(platform::String)
     platform == "S2" && return "sentinel2"
     startswith(platform, "S1") && return "sentinel1"
     startswith(platform, "NISAR") && return "nisar"
+    platform == "AST" && return "aster"
     throw(ArgumentError("no Open Data directory is recorded for platform " * platform))
 end
 

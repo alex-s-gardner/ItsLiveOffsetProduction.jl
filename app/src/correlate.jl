@@ -105,12 +105,21 @@ the no-data mask is set, and a blocked `autorift` over 512² read chunks. `filte
 reading zero (`np.isclose(image, 0)`), which AutoRIFT reads from the validity masks rather than from the
 values.
 
+An ASTER pair ([`is_aster`](@ref)) is correlated with [`UnsaturatedMask`](@ref) validity masks, which keep the
+correlator off band 3N's saturated areas, and a measurement whose correlation is below
+[`ASTER_MIN_CORRELATION`](@ref) is dropped.
+
 The outputs are pasted into the pre-chop grid and dropped wherever the grown mask or a zero search limit
 says the driver reports nothing (`testautoRIFT.py:806-818`).
 """
 function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile::Union{Nothing,Int},
                    cache_io::Symbol, masked::Bool, scratch::String)
     g = s.geometry
+    aster = is_aster(s)
+    sentinel = Int32(g.nodata.output)
+    any(v -> v != sentinel && v > 0, g.search_x) || throw(ErrorException(
+        "the parameter files give no search range anywhere the two scenes overlap, so no point is " *
+        "correlated and no product is written"))
     declined = img.declined
     cmax = driver_chip_size_max(g, declined)
     scale = AutoRIFT.chip_size_scale(g)
@@ -131,7 +140,12 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     keep = .!view(declined, 1:chop[1], 1:chop[2])
     grid = AutoRIFT.rebuild(grid; radius_x = grid.radius_x .* keep, radius_y = grid.radius_y .* keep)
     b = AutoRIFT.block_size_for(grid, p, size(img.early); chunk = (512, 512))
-    r = if masked
+    r = if aster
+        pair = AutoRIFT.ImagePair(img.late, img.early; reference_valid = UnsaturatedMask(img.late),
+                                  secondary_valid = UnsaturatedMask(img.early))
+        AutoRIFT.autorift(pair, grid, p, (b.X, b.Y), 0, filter_tile; filter_cache_io = cache_io,
+                          filter_cache_dir = scratch)
+    elseif masked
         pair = AutoRIFT.ImagePair(img.late, img.early; reference_valid = NonzeroMask(img.late),
                                   secondary_valid = NonzeroMask(img.early))
         AutoRIFT.autorift(pair, grid, p, (b.X, b.Y), 0, filter_tile; filter_cache_io = cache_io,
@@ -142,6 +156,12 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     end
     dx = pad_to_orig(Matrix{Float32}(r.dx), orig, NaN32)
     dy = dy_sign(s) .* pad_to_orig(Matrix{Float32}(r.dy), orig, NaN32)
+    if aster
+        corr = pad_to_orig(Matrix{Float32}(r.correlation), orig, NaN32)
+        # An interpolated point carries no correlation of its own (NaN), which compares false, and is kept.
+        weak = corr .< ASTER_MIN_CORRELATION
+        dx[weak] .= NaN32; dy[weak] .= NaN32
+    end
     chipx = pad_to_orig(Matrix{UInt16}(r.chip_size), orig, UInt16(0))
     interp = pad_to_orig(Matrix{Bool}(r.interpolated), orig, false)
     for i in eachindex(dx)

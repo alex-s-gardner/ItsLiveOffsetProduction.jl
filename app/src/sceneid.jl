@@ -7,6 +7,7 @@
 #   Sentinel-1           S1A_IW_SLC__1SDV_20211118T161558_…_04D1E5_D6DE  its zip at ASF
 #   Sentinel-1 burst     S1_342239_IW3_20211202T161351_VV_3876-BURST     the burst of an SLC zip CMR names
 #   NISAR                NISAR_L1_PR_RSLC_008_155_D_055_…_001            its .h5 at ASF, as CMR lists it
+#   ASTER                AST_L1T_00407222024142636_20251005235025        its band 3N at LP DAAC, as CMR lists it
 #
 # `scene_source` takes the ID of one scene. A burst ID is ESA's relative burst ID, subswath, time,
 # polarization and the SLC's checksum; which SLC holds the burst, and at what index, only CMR's burst record
@@ -109,20 +110,22 @@ StructTypes.names(::Type{CmrGranule}) =
 _cmr_error(g::CmrGranule, what::String) = ArgumentError("CMR's record of " * g.granule_ur * " " * what)
 
 """
-    cmr_granules(doc, ids) -> Vector{CmrGranule}
+    cmr_granules(doc, ids; catalog) -> Vector{CmrGranule}
 
 The granules `ids` name, in that order, out of CMR granule search response `doc`. Throws naming any ID the
-response does not hold.
+response does not hold, and `catalog`, the provider's catalog searched.
 """
-function cmr_granules(doc::String, ids::Vector{String})
+function cmr_granules(doc::String, ids::Vector{String}; catalog::String = "ASF's catalog (CMR)")
     found = Dict{String,CmrGranule}(item.umm.granule_ur => item.umm for item in JSON3.read(doc, CmrSearch).items)
     missing_ids = filter(id -> !haskey(found, id), ids)
-    isempty(missing_ids) || throw(ArgumentError("ASF's catalog (CMR) lists no granule " * join(missing_ids, ", ")))
+    isempty(missing_ids) || throw(ArgumentError(catalog * " lists no granule " * join(missing_ids, ", ")))
     return [found[id] for id in ids]
 end
 
-# The granules `ids` name, from one CMR search. IDs the patterns above accept need no escaping in a query.
-cmr_lookup(ids::Vector{String}) = cmr_granules(read_text(CMR_GRANULES * join(["&granule_ur=" * id for id in unique(ids)])), ids)
+# The granules `ids` name, from one CMR search of the provider and collection `base` names. IDs the patterns
+# above accept need no escaping in a query.
+cmr_lookup(ids::Vector{String}; base::String = CMR_GRANULES, catalog::String = "ASF's catalog (CMR)") =
+    cmr_granules(read_text(base * join(["&granule_ur=" * id for id in unique(ids)])), ids; catalog)
 
 function cmr_attribute(g::CmrGranule, name::String)
     for a in g.attributes
@@ -151,14 +154,16 @@ end
 burst_specs(ids::Vector{String}) = [burst_spec(g) for g in cmr_lookup(ids)]
 
 """
-    granule_h5(g) -> String
+    granule_link(g, suffix) -> String
 
-The one `https://` link to a `.h5` among CMR record `g`'s data links.
+The one `https://` data link of CMR record `g` ending in `suffix`.
 """
-function granule_h5(g::CmrGranule)
-    hits = [u.url for u in g.urls if u.type == "GET DATA" && startswith(u.url, "https://") && endswith(u.url, ".h5")]
-    length(hits) == 1 || throw(_cmr_error(g, "lists " * string(length(hits)) * " https:// .h5 links, not one"))
+function granule_link(g::CmrGranule, suffix::String)
+    hits = [u.url for u in g.urls if u.type == "GET DATA" && startswith(u.url, "https://") && endswith(u.url, suffix)]
+    length(hits) == 1 || throw(_cmr_error(g, "lists " * string(length(hits)) * " https:// " * suffix * " links, not one"))
     return hits[1]
 end
+
+granule_h5(g::CmrGranule) = granule_link(g, ".h5")
 
 nisar_url(id::String) = granule_h5(only(cmr_lookup([id])))

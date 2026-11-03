@@ -220,7 +220,8 @@ const NSIDC_PLATFORMS = Dict(
     "LT04" => ("LANDSAT-4", "TM"), "S1A" => ("SENTINEL-1", "Sentinel-1A"), "S1B" => ("SENTINEL-1", "Sentinel-1B"),
     "S1C" => ("SENTINEL-1", "Sentinel-1C"), "S1D" => ("SENTINEL-1", "Sentinel-1D"),
     "S2A" => ("SENTINEL-2", "Sentinel-2A"), "S2B" => ("SENTINEL-2", "Sentinel-2B"),
-    "S2C" => ("SENTINEL-2", "Sentinel-2C"), "S2D" => ("SENTINEL-2", "Sentinel-2D"), "NISAR" => ("NISAR", "L-SAR"))
+    "S2C" => ("SENTINEL-2", "Sentinel-2C"), "S2D" => ("SENTINEL-2", "Sentinel-2D"), "NISAR" => ("NISAR", "L-SAR"),
+    "AST" => ("TERRA", "ASTER"))
 
 """
     premet(s, id) -> String

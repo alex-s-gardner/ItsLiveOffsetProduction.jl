@@ -4,12 +4,13 @@ const USAGE = """
 usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [options]
        autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 
-  sensor       L4 L5 L7 L8 L9 S2 S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
+  sensor       L4 L5 L7 L8 L9 S2 AST S1 S1BURST NL1 NL2; by default the reference's. A list of SLC zips is
                a burst pair (S1BURST), with --subset; so is a Sentinel-1 SLC given with --subset.
   reference    a scene's band — a local path, an s3:// URI or an https:// URL — or its STAC item
   secondary    (a local .json or a URL). Landsat: the <scene>_B8.TIF (L7, L8, L9) or <scene>_B2.TIF
                (L4, L5) band, with <scene>_MTL.json and <scene>_ANG.txt beside it, or a landsatlook
                STAC item. Sentinel-2: the B08.jp2 inside a .SAFE, or an Earth Search STAC item.
+               ASTER (AST): the L1T granule's <granule>_VNIR_B03N.tif.
                Sentinel-1 (S1): the IW SLC product's .SAFE directory or its .zip, local or a URL;
                (S1BURST) the SLC zips the bursts are in, comma-separated, with --subset; the bursts'
                extractor URLs, comma-separated
@@ -17,10 +18,11 @@ usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [option
                SAFE burst2safe assembles from them.
                NISAR: the RSLC (NL1) or GSLC (NL2) granule's .h5.
                Or the scene ID alone: a Landsat scene (LC08_L1TP_021248_20210507_20210517_02_T1),
-               a Sentinel-2 product, a Sentinel-1 SLC, a NISAR granule, or for S1BURST the bursts
+               a Sentinel-2 product, an ASTER L1T granule (AST_L1T_00407222024142636_20251005235025),
+               a Sentinel-1 SLC, a NISAR granule, or for S1BURST the bursts
                (S1_342239_IW3_20211202T161351_VV_3876-BURST), comma-separated; each is resolved to
-               the input above, NISAR granules and bursts through ASF's catalog (CMR), a burst to
-               itself in its SLC's zip.
+               the input above, ASTER granules through LP DAAC's catalog (CMR), NISAR granules and
+               bursts through ASF's, a burst to itself in its SLC's zip.
   -r, --reference SCENE..., -s, --secondary SCENE...
                the two scenes as lists, each item a separate argument (or several in one,
                separated by spaces or commas), as HyP3 passes a burst pair's bursts; in place of
@@ -30,7 +32,7 @@ usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [option
                <ref>_X_<sec>_G0120V02_P<valid>.nc, in the working directory
 
 options:
-  --scratch DIR        local scratch for the run's tile caches and a remote Sentinel-2 band (default:
+  --scratch DIR        local scratch for the run's tile caches and a remote Sentinel-2 or ASTER band (default:
                        \$TMPDIR/autorift_itslive);
                        must be on disk, not a RAM-backed tmpfs such as /tmp on Amazon Linux
   --cache-io MODE      pread (default) or mmap, how the scratch tile caches are accessed
@@ -74,7 +76,8 @@ Landsat is read from s3://usgs-landsat, which is requester-pays: the AWS credent
 AWS_PROFILE, container or instance role) must name an account that can pay. A NISAR granule over https://
 from an Earthdata host is read with the token in EARTHDATA_TOKEN, or one obtained with the
 urs.earthdata.nasa.gov credentials in EARTHDATA_USERNAME and EARTHDATA_PASSWORD, or else in ~/.netrc (or
-the file NETRC names). Sentinel-1 bursts are fetched from ASF's burst extractor
+the file NETRC names); so is an ASTER band from LP DAAC, which is copied to the run's scratch directory
+first. Sentinel-1 bursts are fetched from ASF's burst extractor
 with those credentials, waiting while the extractor generates them, or inflated out of their SLC
 zips, which are read with the same credentials; either way into the run's scratch directory.
 """

@@ -296,6 +296,7 @@ const STABLE_SHIFT_APPLIED = Dict(
     "Sentinel-2" => true,
     "Sentinel-1" => false,
     "NISAR" => false,
+    "ASTER" => true,
 )
 
 """
@@ -308,6 +309,7 @@ function mission_name(info::ImagePairInfo)
     m, s = info.mission_img1, string(info.satellite_img1)
     m == "L" && return "Landsat"
     m == "N" && return "NISAR"
+    m == "T" && return "ASTER"
     m == "S" && startswith(s, "1") && return "Sentinel-1"
     m == "S" && startswith(s, "2") && return "Sentinel-2"
     throw(ArgumentError("mission code " * m * " with satellite " * s * " is not a known mission; add it to " *
@@ -322,27 +324,43 @@ function applies_stable_shift(input::ItsLiveInput)
     return applied
 end
 
-function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{Float32},
-                                coeffs::GeogridCoefficients, refv::ReferenceVelocity,
-                                ssm::AbstractMatrix{Bool}, apply::Bool)
-    finite_dx = .!isnan.(dx)
-    stable_count = count(ssm .& finite_dx)
+"""
+    reference_offsets(coeffs, refv) -> (dxref, dyref)
 
-    vtemp = sqrt.(refv.vx .^ 2 .+ refv.vy .^ 2)
-    finite_v = filter(!isnan, vec(vtemp))
-    ssm1 = if isempty(finite_v)
-        falses(size(vtemp))
-    else
-        threshold = quantile(finite_v, 0.25)
-        vtemp .<= threshold
-    end
-    stable_count1 = count(ssm1 .& finite_dx)
-
+The offsets (pixels) the reference velocity `refv` implies through the geogrid's offset-to-velocity
+coefficients: the motion the stable-surface correction subtracts before it takes its shift. NaN where the
+reference or a coefficient is.
+"""
+function reference_offsets(coeffs::GeogridCoefficients, refv::ReferenceVelocity)
     denom = coeffs.offset2vx_1 .* coeffs.offset2vy_2 .- coeffs.offset2vx_2 .* coeffs.offset2vy_1
     dxref = (coeffs.offset2vy_2 ./ denom .* refv.vx .- coeffs.offset2vx_2 ./ denom .* refv.vy) ./
             coeffs.scale_factor_1
     dyref = (coeffs.offset2vx_1 ./ denom .* refv.vy .- coeffs.offset2vy_1 ./ denom .* refv.vx) ./
             coeffs.scale_factor_2
+    return dxref, dyref
+end
+
+"""
+    slowest_quarter(refv) -> BitMatrix
+
+The cells whose reference speed is at or below its 25th percentile: the stable-surface correction's
+fallback when the stable-surface mask holds no measurement. All false when the reference has no finite speed.
+"""
+function slowest_quarter(refv::ReferenceVelocity)
+    vtemp = sqrt.(refv.vx .^ 2 .+ refv.vy .^ 2)
+    finite_v = filter(!isnan, vec(vtemp))
+    isempty(finite_v) && return falses(size(vtemp))
+    return vtemp .<= quantile(finite_v, 0.25)
+end
+
+function _stable_shift_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{Float32},
+                                coeffs::GeogridCoefficients, refv::ReferenceVelocity,
+                                ssm::AbstractMatrix{Bool}, apply::Bool)
+    finite_dx = .!isnan.(dx)
+    stable_count = count(ssm .& finite_dx)
+    ssm1 = slowest_quarter(refv)
+    stable_count1 = count(ssm1 .& finite_dx)
+    dxref, dyref = reference_offsets(coeffs, refv)
 
     dx_mean_shift = stable_count != 0 ? _median_over_mask(dx .- dxref, ssm) : 0.0
     dy_mean_shift = stable_count != 0 ? _median_over_mask(dy .- dyref, ssm) : 0.0
@@ -630,7 +648,7 @@ end
 # Metadata assembly (`testautoRIFT.py`'s `date_dt`/`date_center`/`satellite` computation).
 # ---------------------------------------------------------------------------
 
-const MISSION_NAMES = Dict("L" => "Landsat ", "S" => "Sentinel-", "N" => "NISAR")
+const MISSION_NAMES = Dict("L" => "Landsat ", "S" => "Sentinel-", "N" => "NISAR", "T" => "Terra ASTER")
 
 # `testautoRIFT.py:1366`. The ratio is quantized to three decimals as a *fraction* and only then scaled
 # to a percentage, so `0.784` becomes `78.4` — quantizing the percentage instead would keep a digit the

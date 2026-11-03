@@ -121,7 +121,7 @@ end
 
 The per-image-pair metadata the reference calls `IMG_INFO_DICT`.
 
-`mission_img1`/`mission_img2` (`"L"`, `"S"`, or `"N"`) and `satellite_img1`/`satellite_img2` feed the
+`mission_img1`/`mission_img2` (`"L"`, `"S"`, `"N"`, or `"T"` for Terra ASTER) and `satellite_img1`/`satellite_img2` feed the
 `satellite` global attribute. `satellite_img1`/`satellite_img2` are a `String` or an `Int64` because the
 reference's own `IMG_INFO_DICT` carries them as whatever type the source metadata gives — a string for
 Landsat/Sentinel (`"8"`, `"A"`) but a bare integer for NISAR — and both the type and the value are
