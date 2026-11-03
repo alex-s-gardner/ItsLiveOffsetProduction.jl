@@ -659,6 +659,7 @@ function _record!(info::ItsLiveOffsetProduction.ImagePairInfo, ts::TideSetting, 
                       " mm/hPa, with the tide; ERA5 does not yet reach " * _hour_string(t) :
         "none: neither ERA5 nor the IFS runs reach " * _hour_string(t)
     info.extra["tide_correction_uncovered"] = v.uncovered
+    info.extra["tide_correction_flag"] = Int64(1)
     m = round(_median(v.dz); digits = 3)
     info.extra["tide_correction_dz_median"] = m
     say("tide       " * string(length(v.dz)) * " floating-ice and ocean points, median dz " * string(m) * " m" *

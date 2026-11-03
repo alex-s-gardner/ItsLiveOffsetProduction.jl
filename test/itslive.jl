@@ -262,9 +262,9 @@ end
     dx = 40.0f0 .+ randn(rng, Float32, ny, nx)
     dy = -25.0f0 .+ randn(rng, Float32, ny, nx)
 
-    function written(mission, satellite)
+    function written(mission, satellite; extra = Dict{String,Any}())
         info = ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), mission, mission, satellite, satellite,
-                             80.0, 65.0, -45.0, Dict{String,Any}())
+                             80.0, 65.0, -45.0, extra)
         input = ItsLiveInput(:radar, "feature", "radar", "1.0.0", "params.shp", "unit-test",
                              12.0 * 86400, georef, info, coeffs, refv, trues(ny, nx), nothing,
                              dx, dy, fill(UInt16(32), ny, nx), 1.0, falses(ny, nx))
@@ -272,8 +272,10 @@ end
         try
             write_product(path, input)
             return NCDataset(path) do ds
-                Dict(name => (attrib = Dict(ds[name].attrib), data = collect(skipmissing(ds[name][:, :, 1])))
-                     for name in ("vx", "vy", "vr", "va"))
+                d = Dict{String,Any}(name => (attrib = Dict(ds[name].attrib), data = collect(skipmissing(ds[name][:, :, 1])))
+                                     for name in ("vx", "vy", "vr", "va"))
+                d["img_pair_info"] = (attrib = Dict(ds["img_pair_info"].attrib), data = nothing)
+                d
             end
         finally
             rm(path; force = true)
@@ -285,10 +287,18 @@ end
     # An optical product on the same inputs: Sentinel-2 shares Sentinel-1's mission code.
     other = written("S", "2A")
     @test written("L", "8")["vx"].attrib["stable_shift_flag"] == 1
-    @test written("T", "")["vx"].attrib["stable_shift_flag"] == 1
+    @test written("T", "1")["vx"].attrib["stable_shift_flag"] == 1
+    # ASTER's satellite is "1", the one Terra, and the attribute names the mission alone.
     @test ItsLiveOffsetProduction._satellite_attribute(
-        ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "T", "T", "", "", 80.0, 65.0, -45.0,
+        ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "T", "T", "1", "1", 80.0, 65.0, -45.0,
                       Dict{String,Any}())) == "Terra ASTER"
+    # Every product records whether a tide or a geometric correction was removed: 0 unless the producer says so.
+    plain = s1["img_pair_info"].attrib
+    @test (plain["tide_correction_flag"], plain["geometric_correction_flag"]) == (0, 0)
+    corrected = written("T", "1"; extra = Dict("geometric_correction_flag" => Int64(1),
+                                               "geometric_correction" => "a fit"))["img_pair_info"].attrib
+    @test (corrected["geometric_correction_flag"], corrected["geometric_correction"], corrected["tide_correction_flag"]) ==
+          (1, "a fit", 0)
     # A mission without a stable-shift decision is refused rather than given a default.
     @test_throws "mission code S with satellite 3A is not a known mission" written("S", "3A")
     for (name, shift) in (("vx", median(dx)), ("vy", median(dy)), ("vr", median(dx)), ("va", median(dy)))

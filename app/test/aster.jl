@@ -36,7 +36,7 @@ const AST_CMR = """
     @test infer_sensor(AST_DIR * "_VNIR_B03N.tif") == "AST"
     @test opendata_platform("AST") == "aster"
     id = aster_identification(AST_UR)
-    @test (id.mission, id.satellite, id.sensor, id.correction_level) == ("T", "", "ASTER", "L1T")
+    @test (id.mission, id.satellite, id.sensor, id.correction_level) == ("T", "1", "AST", "L1T")
     @test id.acquisition_time == DateTime(2024, 7, 22, 14, 26, 36)
 end
 
@@ -68,13 +68,14 @@ end
     dx = Float32.(0.25 .+ jitter .+ tilt)                 # cross-track offset (east): constant + jitter + ramp
     dy = Float32.(fill(-0.1, nr, nc))
     ssm = trues(nr, nc)
-    cx, cy = aster_correct(dx, dy, ssm, x, y, frame)
+    cx, cy, fitted = aster_correct(dx, dy, ssm, x, y, frame)
+    @test fitted
     # Jitter and ramp removed; the stable cells' median level is kept for the product's stable shift.
     @test maximum(abs.(cx .- median(dx))) < 0.03
     @test maximum(abs.(cy .+ 0.1f0)) < 0.01
     # Too few stable cells: the offsets as they were.
     few = falses(nr, nc); few[1:10, 1:10] .= true
-    @test aster_correct(dx, dy, few, x, y, frame) == (dx, dy)
+    @test aster_correct(dx, dy, few, x, y, frame) == (dx, dy, false)
     # The fit's cells: the stable mask when it holds a measurement, else the slowest quarter of the reference.
     refv = ItsLiveOffsetProduction.ReferenceVelocity(Float32[j for i in 1:nr, j in 1:nc], zeros(Float32, nr, nc))
     @test aster_fit_mask(ssm, refv, dx) == ssm

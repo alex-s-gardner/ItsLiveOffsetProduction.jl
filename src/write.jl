@@ -649,6 +649,8 @@ end
 # ---------------------------------------------------------------------------
 
 const MISSION_NAMES = Dict("L" => "Landsat ", "S" => "Sentinel-", "N" => "NISAR", "T" => "Terra ASTER")
+# Missions named without their satellite number: their `satellite` attribute is the mission name alone.
+const UNNUMBERED_MISSIONS = ("T",)
 
 # `testautoRIFT.py:1366`. The ratio is quantized to three decimals as a *fraction* and only then scaled
 # to a percentage, so `0.784` becomes `78.4` — quantizing the percentage instead would keep a digit the
@@ -685,8 +687,9 @@ function _satellite_attribute(info::ImagePairInfo)
         throw(ArgumentError("unrecognized mission code $(info.mission_img2)"))
     # `string`, not `*`: `satellite_img1`/`satellite_img2` carry whatever type the source metadata
     # gives (a bare integer for NISAR), matching Python's f-string, which stringifies either way.
-    s1 = MISSION_NAMES[info.mission_img1] * string(info.satellite_img1)
-    s2 = MISSION_NAMES[info.mission_img2] * string(info.satellite_img2)
+    name(m, s) = m in UNNUMBERED_MISSIONS ? MISSION_NAMES[m] : MISSION_NAMES[m] * string(s)
+    s1 = name(info.mission_img1, info.satellite_img1)
+    s2 = name(info.mission_img2, info.satellite_img2)
     return s1 == s2 ? s1 : "$s1 and $s2"
 end
 
@@ -725,11 +728,11 @@ _format_created(dt::DateTime) =
 # real capture, since only an optical case has been checked so far.
 _format_date_stripped(dt::DateTime) = String(rstrip(_format_date(dt), '0'))
 
-# Entry by entry rather than through `Dict(pairs...)`, whose thirteen differently typed pairs are a
+# Entry by entry rather than through `Dict(pairs...)`, whose fifteen differently typed pairs are a
 # `Vararg{Any}` call a `--trim`med program cannot make. Sized first, as that constructor sizes it, so
 # the attributes iterate — and are written — in the same order.
 function _img_pair_info_attrs(info::ImagePairInfo, date_dt::Float64, date_center_str::String)
-    d = sizehint!(Dict{String,AttrValue}(), 13)
+    d = sizehint!(Dict{String,AttrValue}(), 15)
     d["acquisition_date_img1"] = _format_date_stripped(info.acquisition_date_img1)
     d["acquisition_date_img2"] = _format_date_stripped(info.acquisition_date_img2)
     d["mission_img1"] = info.mission_img1
@@ -743,6 +746,10 @@ function _img_pair_info_attrs(info::ImagePairInfo, date_dt::Float64, date_center
     d["latitude"] = info.latitude
     d["longitude"] = info.longitude
     d["roi_valid_percentage"] = info.roi_valid_percentage
+    # Whether the offsets had a tide or a geometric correction removed: 0 unless the producer recorded one
+    # (nasa-jpl/its_live_production#68), so every product carries both flags.
+    d["tide_correction_flag"] = Int64(0)
+    d["geometric_correction_flag"] = Int64(0)
     merge!(d, info.extra)
     return d
 end

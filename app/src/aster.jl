@@ -17,6 +17,9 @@ const CMR_LPCLOUD =
 # `AST_L1T_VVVMMDDYYYYHHMMSS_YYYYMMDDHHMMSS`: the processing version (`003`, `004`), the acquisition, then
 # the production time.
 const ASTER_ID = r"^AST_L1T_\d{3}(\d{2})(\d{2})(\d{4})(\d{2})(\d{2})(\d{2})_\d{14}$"
+# The sensor and correction level of the collection, `AST_L1T`, every name `ASTER_ID` matches belongs to.
+const ASTER_SENSOR = "AST"
+const ASTER_CORRECTION_LEVEL = "L1T"
 const ASTER_BAND_FILE = r"^(AST_L1T_\d{17}_\d{14})_VNIR_B03N\.tif$"
 
 # The value a saturated band-3N sample holds, and how far around a saturated sample the correlator is
@@ -29,6 +32,11 @@ const ASTER_SATURATION_GROW = 2
 const ASTER_MIN_CORRELATION = 0.3f0
 
 is_aster_id(s::AbstractString) = occursin(ASTER_ID, s)
+
+# `img_pair_info:geometric_correction` of an ASTER product: the correction removed from its offsets.
+const ASTER_GEOMETRIC_CORRECTION =
+    "robust fit over stable surfaces of a quadratic in map position, cubics in along- and cross-track position, " *
+    "and sinusoids at the scene's pitch and roll jitter wavelengths, removed from the offsets before the stable shift"
 
 """
     aster_acquisition(name) -> DateTime
@@ -69,13 +77,13 @@ end
 """
     aster_identification(name) -> OpticalDatasets.Identification
 
-An ASTER scene's identity: mission `"T"` (Terra), no satellite number (there was one Terra), sensor
-`"ASTER"`, product level `"L1T"`, and the acquisition time the granule name carries. It carries none of
-Landsat's path, row and collection.
+An ASTER scene's identity: mission `"T"` (Terra) and satellite `"1"`, the one Terra; the sensor (`"AST"`)
+and correction level (`"L1T"`) of the collection the granule name belongs to; and the acquisition time the
+name carries. It carries none of Landsat's path, row and collection.
 """
 aster_identification(name::String) =
-    OpticalDatasets.Identification(name, "T", "", "ASTER", "L1T", aster_acquisition(name), nothing, nothing, nothing,
-                                   nothing, nothing)
+    OpticalDatasets.Identification(name, "T", "1", ASTER_SENSOR, ASTER_CORRECTION_LEVEL, aster_acquisition(name),
+                                   nothing, nothing, nothing, nothing, nothing)
 
 # ---------------------------------------------------------------------------
 # Reading the band
@@ -188,7 +196,7 @@ function aster_track_frame(band::String, epsg::Int)
 end
 
 """
-    aster_correct(dx, dy, ssm, x, y, frame) -> (dx, dy)
+    aster_correct(dx, dy, ssm, x, y, frame) -> (dx, dy, fitted)
 
 `dx`, `dy` (pixels, on the product grid at cell centres `x`, `y`) with the ASTER L1T distortion removed, as
 fitted over the stable surface `ssm`: per offset component, a quadratic in map position, cubics in the
@@ -198,14 +206,15 @@ and at its cross-track jitter wavelength. The fit is a Tukey-biweight robust lea
 the correlator got wrong does not pull it. The constant term is left in the offsets: the product's own
 stable-surface shift removes it, and records it as it does for every optical pair.
 
-A scene with fewer than [`ASTER_MIN_STABLE`](@ref) stable cells is returned as it is.
+`fitted` is whether the fit was made: a scene with fewer than [`ASTER_MIN_STABLE`](@ref) stable cells is
+returned as it is, with `fitted` false.
 """
 function aster_correct(dx::Matrix{Float32}, dy::Matrix{Float32}, ssm::AbstractMatrix{Bool},
                        x::Vector{Float64}, y::Vector{Float64}, frame)
     nr, nc = size(dx)
     (length(y), length(x)) == (nr, nc) || throw(DimensionMismatch("the offsets and the grid differ in size"))
     fit = ssm .& isfinite.(dx) .& isfinite.(dy)
-    count(fit) < ASTER_MIN_STABLE && return dx, dy
+    count(fit) < ASTER_MIN_STABLE && return dx, dy, false
     tv, dv = frame
     X = repeat(x', nr); Y = repeat(y, 1, nc)
     S = tv[1] .* X .+ tv[2] .* Y           # along-track (acquisition time) position, m
@@ -223,7 +232,7 @@ function aster_correct(dx::Matrix{Float32}, dy::Matrix{Float32}, ssm::AbstractMa
     fy = reshape(_robust_fit(G, vec(ddy), vec(fit)), nr, nc)
     # Keep the constant: subtract the fit minus its value at the stable cells' median.
     cx = _median_nonan(fx[fit]); cy = _median_nonan(fy[fit])
-    return Float32.(ddx .- (fx .- cx)), Float32.(ddy .- (fy .- cy))
+    return Float32.(ddx .- (fx .- cx)), Float32.(ddy .- (fy .- cy)), true
 end
 
 _median_nonan(v) = ItsLiveOffsetProduction._median_nonan(v)
