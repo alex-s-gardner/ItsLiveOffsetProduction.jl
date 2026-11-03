@@ -124,7 +124,9 @@ A NISAR L2 pair's offsets over polar floating ice and ocean first have the tide 
 removed ([`tide_correct`](@ref)) when `tide` is set, with the region's own tide model or, when not empty,
 `tide_model`. An ASTER pair's offsets have the L1T product's distortion and jitter removed
 ([`aster_correct`](@ref)), fitted over the stable surface; the constant shift is left for the product's own
-stable-surface correction. Any other optical pair is not corrected.
+stable-surface correction. `img_pair_info:geometric_correction_flag` records whether the fit was made (1) or
+the scene had too little stable surface for it (0), and `geometric_correction` describes the fit when it was
+(nasa-jpl/its_live_production#68). Any other optical pair is not corrected.
 """
 function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String) where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
@@ -144,9 +146,13 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool
         # The offsets less the reference motion, so the fit sees only the geometry's error; added back after.
         dxr, dyr = ItsLiveOffsetProduction.reference_offsets(coeffs, refv)
         fit = aster_fit_mask(ssm, refv, dx)
-        cx, cy = aster_correct(Float32.(dx .- dxr), Float32.(dy .- dyr), fit, x, y,
-                               aster_track_frame(s.early.band, s.region.epsg))
+        cx, cy, fitted = aster_correct(Float32.(dx .- dxr), Float32.(dy .- dyr), fit, x, y,
+                                       aster_track_frame(s.early.band, s.region.epsg))
         dx, dy = Float32.(cx .+ dxr), Float32.(cy .+ dyr)
+        if fitted
+            info.extra["geometric_correction"] = ASTER_GEOMETRIC_CORRECTION
+            info.extra["geometric_correction_flag"] = Int64(1)
+        end
     end
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,

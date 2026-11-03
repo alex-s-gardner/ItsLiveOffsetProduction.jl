@@ -134,7 +134,9 @@ down to `0`, matching the reference's own criterion — its filename ends in `_P
 condition, and `process.py` decides whether to crop from that filename, not from a fresh check of
 whether any pixel is valid. The two read differently only at the boundary, but they do: a real captured
 case with 19,994 valid pixels (0.39% of the grid) has `roi_valid_percentage = 0.9`, floors to `0`, and
-the reference leaves it uncropped despite the nonzero count. `extra` carries every other `img_pair_info`
+the reference leaves it uncropped despite the nonzero count. Every product also carries
+`tide_correction_flag` and `geometric_correction_flag`, 0 unless `extra` sets them to 1 for a product whose
+offsets had that correction removed. `extra` carries every other `img_pair_info`
 attribute (`id_img1`, `sensor_img1`, orbit numbers, path/row, and so on) through verbatim; it may be
 given as any dictionary whose values [`attrvalue`](@ref) accepts. Sourcing those from raw sensor
 metadata (SAFE XML, MTL, HDF5, STAC) is outside this package.

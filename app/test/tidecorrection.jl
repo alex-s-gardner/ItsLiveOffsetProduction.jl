@@ -9,6 +9,8 @@ using AutoriftItsLiveProduction: TideConstants, tide_point, tide_height, TIDE_BA
                                  epsg_wkt as A_epsg_wkt, ifs_msl_range, _ifs_run,
                                  _era5_hours, _msl_at, _interp_linear, _hour_string
 import ImagePairGeometry as IPG
+import AutoriftItsLiveProduction
+import ItsLiveOffsetProduction
 import GDAL
 
 # A GeoTIFF of `bands[x, y, b]` on EPSG `epsg` with each band described by `names[b]`, through GDAL itself.
@@ -167,6 +169,18 @@ end
     @test _msl_at(p, row0, 0.0, -0.125, -60.0) ≈ (1000 * 1439 + 0) / 2
     @test_throws "outside the pressure rows" _msl_at(p, row0, 0.0, 0.0, -75.0)
     @test _hour_string(DateTime(2026, 10, 19, 7) + Minute(59)) == "2026-10-19T07"
+end
+
+@testset "a tide correction is recorded with its flag" begin
+    info = ItsLiveOffsetProduction.ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "S", "S", "1A", "1A",
+                                                 80.0, -75.0, -60.0, Dict{String,Any}())
+    ts = AutoriftItsLiveProduction.TideSetting("m", AutoriftItsLiveProduction.CATS_PROJECTION,
+                                               AutoriftItsLiveProduction.WaterMask[], "a tide model", "a mask")
+    v = AutoriftItsLiveProduction.VerticalMotion([CartesianIndex(1, 1)], [0.2], [-60.0], [-75.0],
+                                                 AutoriftItsLiveProduction.ERA5, 0)
+    AutoriftItsLiveProduction._record!(info, ts, v, DateTime(2020, 1, 13), "range offsets")
+    @test info.extra["tide_correction_flag"] == 1
+    @test startswith(info.extra["tide_correction"], "a tide model")
 end
 
 @testset "raising the surface shortens the range by cos θ" begin
