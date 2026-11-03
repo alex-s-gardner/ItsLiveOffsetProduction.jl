@@ -59,12 +59,24 @@ function setup(c::Job)
     return _setup(c, early, late, efp, lfp, warp, rfp, sfp, nothing, nothing)
 end
 
+"""
+    same_spacing(reference, secondary) -> Footprint
+
+`secondary` with `reference`'s pixel spacing when the two agree to a part in 10⁹ — the rounding in a
+header's geotransform (ASTER L1T writes 15 m as 14.999999999999995 in some granules), which moves a pixel
+by less than a nanometre across a scene — and unchanged otherwise, for [`coregister`](@ref) to refuse.
+"""
+function same_spacing(reference::Footprint, secondary::Footprint)
+    all(isapprox.(reference.spacing, secondary.spacing; rtol = 1e-9)) || return secondary
+    return ImageFootprint(secondary.origin, reference.spacing, secondary.size, secondary.crs)
+end
+
 # Coregistration on the footprints `rfp` and `sfp`, the region lookup on the overlap's centre, and the
 # geogrid.
 function _setup(c::Job, early::SceneSource, late::SceneSource, efp::Footprint, lfp::Footprint, warp::Bool,
                 rfp::Footprint, sfp::Footprint, eg::Union{Nothing,GslcScene}, lg::Union{Nothing,GslcScene})
     target = footprint_epsg(rfp)
-    pair = coregister(rfp, sfp; dt = geogrid_seconds(c))
+    pair = coregister(rfp, same_spacing(rfp, sfp); dt = geogrid_seconds(c))
     lon, lat = pair_centroid(pair.coordinate, target)
     region = parameter_region(lon, lat)
     grid = parameter_grid(region)

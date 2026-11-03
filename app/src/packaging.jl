@@ -13,13 +13,15 @@ const MOTION_COORDINATES = "map"
 """
     scene_identification(scene) -> OpticalDatasets.Identification
 
-The scene's identity. A Sentinel-2 product name carries its acquisition time to the second; a Landsat
+The scene's identity. A Sentinel-2 product name, like an ASTER granule name, carries its acquisition time
+to the second; a Landsat
 product id does not carry the time of day, which the reference takes from the scene's STAC item
 (`process.py:63-74`) and which the scene's `_MTL.json` gives as the same instant at the same millisecond
 precision.
 """
 function scene_identification(scene::SceneSource)
     startswith(scene.name, "S2") && return OpticalDatasets.sentinel2_identification(scene.name)
+    is_aster_id(scene.name) && return aster_identification(scene.name)
     id, t = landsat_acquisition(scene.mtl)
     id == scene.name || throw(ArgumentError(scene.mtl * " describes " * id * ", not " * scene.name))
     return OpticalDatasets.landsat_identification(id, t)
@@ -89,6 +91,8 @@ function product_source(info::ItsLiveOffsetProduction.ImagePairInfo)
         return s * ". Landsat-" * string(info.satellite_img1) * " images courtesy of the U.S. Geological Survey"
     info.mission_img1 == "S" && return s * ". Contains modified Copernicus Sentinel data " *
                                        string(Dates.year(info.acquisition_date_img1)) * ", processed by ESA"
+    info.mission_img1 == "T" && return s * ". ASTER L1T data courtesy of NASA/METI/AIST/Japan Space Systems, " *
+                                       "and U.S./Japan ASTER Science Team, distributed by NASA LP DAAC"
     return s
 end
 
@@ -118,7 +122,9 @@ into metres, and a chip is cut in the imagery.
 
 A NISAR L2 pair's offsets over polar floating ice and ocean first have the tide and inverse-barometer motion
 removed ([`tide_correct`](@ref)) when `tide` is set, with the region's own tide model or, when not empty,
-`tide_model`. An optical pair is not corrected.
+`tide_model`. An ASTER pair's offsets have the L1T product's distortion and jitter removed
+([`aster_correct`](@ref)), fitted over the stable surface; the constant shift is left for the product's own
+stable-surface correction. Any other optical pair is not corrected.
 """
 function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String) where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
@@ -134,6 +140,14 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
     dx, dy = tide ? tide_correct(s, x, y, lonlat, c.dx, c.dy, info, tide_model) : (c.dx, c.dy)
+    if is_aster(s)
+        # The offsets less the reference motion, so the fit sees only the geometry's error; added back after.
+        dxr, dyr = ItsLiveOffsetProduction.reference_offsets(coeffs, refv)
+        fit = aster_fit_mask(ssm, refv, dx)
+        cx, cy = aster_correct(Float32.(dx .- dxr), Float32.(dy .- dyr), fit, x, y,
+                               aster_track_frame(s.early.band, s.region.epsg))
+        dx, dy = Float32.(cx .+ dxr), Float32.(cy .+ dyr)
+    end
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), nothing,

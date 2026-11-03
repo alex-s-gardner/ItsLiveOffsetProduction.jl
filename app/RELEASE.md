@@ -12,9 +12,9 @@ autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 ```
 
 - **`<sensor>`** names the kind of pair, from the table below. Without it the sensor is the reference's: its
-  Landsat mission, `S2`, `S1` for an SLC, `S1BURST` for bursts or a list of SLC zips, `NL1` or `NL2`.
+  Landsat mission, `S2`, `AST`, `S1` for an SLC, `S1BURST` for bursts or a list of SLC zips, `NL1` or `NL2`.
 - **`<reference>` and `<secondary>`** are the two scenes. Each is its scene ID (see "Scene IDs"), a local path,
-  an `s3://` URI or an `https://` URL. Landsat and NISAR are read in place, a window at a time; Sentinel-2 bands, Sentinel-1 zip members and
+  an `s3://` URI or an `https://` URL. Landsat and NISAR are read in place, a window at a time; Sentinel-2 and ASTER bands, Sentinel-1 zip members and
   Sentinel-1 bursts are copied to scratch first. The pair is processed in acquisition order whichever scene you
   name first, and the product reports the earlier one as `id_img1`. The sensor must match the reference; for a
   NISAR pair the reference also decides the polarization (below). A scene of the wrong kind is refused with an
@@ -46,6 +46,7 @@ autorift_itslive [<sensor>] [<output.nc>] -r <scene>... -s <scene>... [options]
 | `L7` | the same, with a Landsat 7 reference and the panchromatic band (`_B8.TIF`) | AWS | 4 GB |
 | `L8` `L9` | the same, with a Landsat 8 or 9 reference and the panchromatic band (`_B8.TIF`) | AWS | 5 GB |
 | `S2` | two Sentinel-2 L1C products: the `B08.jp2` inside the product's `.SAFE`, or its Earth Search STAC item | none | 2.5 GB |
+| `AST` | two ASTER L1T granules: each granule's `_VNIR_B03N.tif` (band 3N, 15 m) | Earthdata | 0.1 GB |
 | `S1` | two Sentinel-1 IW SLC products: the `.SAFE` directory or the `.zip` | Earthdata | 30 GB |
 | `S1BURST` | for each pass, the IW SLC `.zip`s its bursts are in, comma-separated, with `--subset` naming the area; or the extractor URLs of its bursts, comma-separated (`https://sentinel1-burst.asf.alaska.edu/<SLC>/IW<n>/<POL>/<index>.tiff`); or the SAFE `burst2safe` assembles. The bursts the two passes share | Earthdata | 18 GB |
 | `NL1` | two NISAR RSLC `.h5` granules of one frame | Earthdata | 67 GB |
@@ -59,6 +60,7 @@ A scene may be named by its ID alone, and is then read from where its provider s
 |---|---|
 | Landsat, `LC08_L1TP_021248_20210507_20210517_02_T1` | its landsatlook STAC item |
 | Sentinel-2, `S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221` | its `B08.jp2` on the Google Cloud mirror |
+| ASTER L1T, `AST_L1T_00407222024142636_20251005235025` | its `_VNIR_B03N.tif` at LP DAAC, as CMR lists it |
 | Sentinel-1 SLC, `S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE` | its zip at ASF |
 | Sentinel-1 burst (`S1BURST`), `S1_342239_IW3_20211202T161351_VV_3876-BURST` | its SLC's zip at ASF, which ASF's catalog (CMR) names |
 | NISAR, `NISAR_L1_PR_RSLC_008_155_D_055_7700_SHNA_A_20251226T225459_20251226T225536_X05009_N_P_J_001` | its `.h5` at ASF, as CMR lists it |
@@ -71,7 +73,8 @@ Credentials are read from the environment:
 - **AWS**: Landsat is read from requester-pays `s3://usgs-landsat`, so the AWS credential chain (environment,
   `AWS_PROFILE`, or the instance role) must name an account that can pay. Run in `us-west-2` to avoid transfer
   charges.
-- **Earthdata**: NISAR granules, Sentinel-1 zips and Sentinel-1 bursts are read from ASF with Earthdata Login.
+- **Earthdata**: NISAR granules, Sentinel-1 zips and Sentinel-1 bursts are read from ASF, and ASTER bands from
+  LP DAAC, with Earthdata Login.
   A burst pair from zips reads each subswath's measurement raster from its start to the last burst it needs,
   so a burst late in a slice costs most of that subswath's raster; the extractor serves each burst alone but
   generates it on first request, which can take a minute.

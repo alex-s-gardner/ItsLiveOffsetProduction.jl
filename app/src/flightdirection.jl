@@ -62,11 +62,12 @@ end
 """
     flight_direction(scene::SceneSource) -> String
 
-The pass of an optical scene: [`landsat_flight_direction`](@ref) of a Landsat scene's `_ANG.txt`, or
+The pass of an optical scene: [`landsat_flight_direction`](@ref) of a Landsat scene's `_ANG.txt`,
 [`s2_flight_direction`](@ref) of a Sentinel-2 product's metadata on the public mirror, found through the
-product's `manifest.safe` as its band is.
+product's `manifest.safe` as its band is, or [`aster_flight_direction`](@ref) of an ASTER scene.
 """
 function flight_direction(scene::SceneSource)
+    is_aster_id(scene.name) && return aster_flight_direction(scene)
     startswith(scene.name, "S2") || return landsat_flight_direction(read_text(scene.ang))
     safe = s2_safe_url(scene.name)
     manifest = read_text(safe * "/manifest.safe")

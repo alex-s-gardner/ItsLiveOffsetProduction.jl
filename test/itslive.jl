@@ -285,6 +285,10 @@ end
     # An optical product on the same inputs: Sentinel-2 shares Sentinel-1's mission code.
     other = written("S", "2A")
     @test written("L", "8")["vx"].attrib["stable_shift_flag"] == 1
+    @test written("T", "")["vx"].attrib["stable_shift_flag"] == 1
+    @test ItsLiveOffsetProduction._satellite_attribute(
+        ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "T", "T", "", "", 80.0, 65.0, -45.0,
+                      Dict{String,Any}())) == "Terra ASTER"
     # A mission without a stable-shift decision is refused rather than given a default.
     @test_throws "mission code S with satellite 3A is not a known mission" written("S", "3A")
     for (name, shift) in (("vx", median(dx)), ("vy", median(dy)), ("vr", median(dx)), ("va", median(dy)))

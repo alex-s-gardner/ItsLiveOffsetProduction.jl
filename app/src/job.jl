@@ -26,6 +26,7 @@ const SENSORS = (
     SensorSpec("L8", "L8", r"^LC08_", LANDSAT_SCENE),
     SensorSpec("L9", "L9", r"^LC09_", LANDSAT_SCENE),
     SensorSpec("S2", "S2", r"^S2[ABC]_MSIL1C_", r"^S2[ABC]_MSIL1C_"),
+    SensorSpec("AST", "AST", r"^AST_L1T_", r"^AST_L1T_"),
     SensorSpec("S1", "S1-SLC", r"^S1[ABCD]_IW_SLC__", r"^S1[ABCD]_IW_SLC__"),
     SensorSpec("S1BURST", "S1-BURST", r"^S1[ABCD]_IW_SLC__", r"^S1[ABCD]_IW_SLC__"),
     SensorSpec("NL1", "NISAR-L1", r"^NISAR_L1_\w+_RSLC_", r"^NISAR_L1_\w+_RSLC_"),
@@ -108,12 +109,12 @@ The scene `input` names. A Landsat input is the band file the reference correlat
 Landsat 7, 8 and 9, `_B2.TIF` (green) for 4 and 5 — with its `_MTL.json` and `_ANG.txt` beside it, or a
 landsatlook STAC item, whose assets name all three. A Sentinel-2 input is the `B08.jp2` band inside a
 `.SAFE`, or an Earth Search STAC item, which is resolved through its `s2:product_uri` to the band on the
-public Google Cloud mirror. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
+public Google Cloud mirror. An ASTER input is the granule's band-3N `_VNIR_B03N.tif`. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
 directory or its `.zip`. A burst pair's input is the bursts' extractor URLs, or bursts of SLC zips
 (`<zip>#IW<n>/<POL>/<index>`), comma-separated, whose scene is the product `burst2safe` would assemble from
 them; or that product's `.SAFE`. Any but a burst pair's may also be the scene's ID (`sceneid.jl`): a Landsat
 ID names its landsatlook STAC item, a Sentinel-2 ID its band on the mirror, a Sentinel-1 ID its zip at ASF
-and a NISAR ID the `.h5` CMR lists.
+a NISAR ID the `.h5` CMR lists, and an ASTER ID the band-3N file CMR lists at LP DAAC.
 """
 function scene_source(input::String, platform::String)
     if startswith(platform, "S1")
@@ -135,6 +136,7 @@ function scene_source(input::String, platform::String)
         endswith(base, ".h5") || throw(ArgumentError("\"" * input * "\" is neither a NISAR granule's .h5 nor its ID"))
         return SceneSource(input, base[1:(end - 3)], input, "", "")
     end
+    platform == "AST" && return aster_scene_source(input)
     if platform == "S2"
         is_stac_item(input) && return _s2_from_item(input)
         occursin(S2_ID, input) && return SceneSource(input, input, s2_band_url(input), "", "")

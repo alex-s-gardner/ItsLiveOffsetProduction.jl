@@ -53,8 +53,8 @@ end
     @test point_to_region(-77.2, 180.0) == "S70E170"
     @test point_to_region(90.0, 0.0) == "N80E000"
     @test point_to_region(-0.5, -0.5) == "S00W000"
-    @test [opendata_platform(p) for p in ("L5", "L9", "S2", "S1-SLC", "S1-BURST", "NISAR-L1", "NISAR-L2")] ==
-          ["landsatOLI", "landsatOLI", "sentinel2", "sentinel1", "sentinel1", "nisar", "nisar"]
+    @test [opendata_platform(p) for p in ("L5", "L9", "S2", "S1-SLC", "S1-BURST", "NISAR-L1", "NISAR-L2", "AST")] ==
+          ["landsatOLI", "landsatOLI", "sentinel2", "sentinel1", "sentinel1", "nisar", "nisar", "aster"]
     @test JSON3.write(PublishInfo("its-live-data", "velocity_image_pair/landsatOLI/v02/N80W040", "a_X_b_G0120V02_P020.nc")) ==
           "{\"bucket\":\"its-live-data\",\"prefix\":\"velocity_image_pair/landsatOLI/v02/N80W040\"," *
           "\"name\":\"a_X_b_G0120V02_P020.nc\"}"

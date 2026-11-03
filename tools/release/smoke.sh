@@ -12,8 +12,8 @@
 #     tools/release/smoke.sh <bundle> imagery NL1 NL2
 #
 # The inputs are read as a normal run reads them, so the environment must supply what they need: AWS
-# credentials for Landsat (AWS_PROFILE or the instance role), ~/.netrc or EARTHDATA_TOKEN for NISAR and
-# Sentinel-1. SMOKE_SCRATCH names the directory the runs' scratch goes under (default: $TMPDIR or /tmp; it
+# credentials for Landsat (AWS_PROFILE or the instance role), ~/.netrc or EARTHDATA_TOKEN for NISAR,
+# Sentinel-1 and ASTER. SMOKE_SCRATCH names the directory the runs' scratch goes under (default: $TMPDIR or /tmp; it
 # must be on disk, not tmpfs). Exits nonzero if any group fails.
 set -u
 bundle=$1; stage=${2:-geometry}; shift $(( $# > 1 ? 2 : 1 )); groups=("$@")

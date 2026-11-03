@@ -204,7 +204,7 @@ version = "1.0.0"
 
 [[deps.ChunkManifests]]
 deps = ["Base64", "CRC32c", "Dates", "HDF5_jll", "HTTP", "JSON", "LibCURL", "LibCURL_jll", "Libdl", "Logging", "Mmap", "NetworkOptions", "PrecompileTools", "Proj", "SHA", "Zarr", "ZarrCore", "Zlib_jll"]
-git-tree-sha1 = "f2d0b9d6c68fab4ad591eeda3c65b408292263ff"
+git-tree-sha1 = "eeb80abb70df3a703740642bd85a679fd9ef4915"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/ChunkManifests.jl"
 uuid = "558bc7c3-2be7-4981-9bcf-ba6cea128854"

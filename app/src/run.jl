@@ -199,6 +199,10 @@ function _correlate(c::Job, s, img::Imagery, output::String, options::RunOptions
     end
 end
 
+# Whether a setup is an ASTER pair's, which the correlation and packaging treat as their own case.
+is_aster(s::Setup) = s.job.platform == "AST"
+is_aster(s) = false
+
 function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
                                 filter_tile::Union{Nothing,Int}, masked::Bool, output::String, o::RunOptions,
                                 dir::String)
