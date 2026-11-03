@@ -143,7 +143,7 @@ end
     @test ifs_msl_range(index) == (1527856, 527204)
     @test ifs_msl_range("{\"levtype\": \"sfc\", \"param\": \"2t\", \"_offset\": 1, \"_length\": 2}") === nothing
     @test _ifs_run(DateTime(2026, 10, 24, 6)) ==
-          "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com/20261024/06z/ifs/0p25/oper/20261024060000-0h-oper-fc"
+          "https://storage.googleapis.com/ecmwf-open-data/20261024/06z/ifs/0p25/oper/20261024060000-0h-oper-fc"
 end
 
 @testset "CATS2008_v2023 is on its own projection" begin

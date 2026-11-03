@@ -84,7 +84,7 @@ def open_model(files):
     return (open_cats(files[0]), "TMD3") if len(files) == 1 else (open_gr1km(*files), "OTIS")
 
 
-IFS_DATA = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+IFS_DATA = "https://storage.googleapis.com/ecmwf-open-data"
 
 
 def ifs_msl(run, lon, lat):
