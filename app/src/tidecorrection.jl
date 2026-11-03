@@ -265,10 +265,11 @@ _msl_blend(p0::Matrix{Float32}, p1::Matrix{Float32}, f::Float64, row0::Int, lon0
     [(1 - f) * _msl_at(p0, row0, lon0, lons[q], lats[q]) + f * _msl_at(p1, row0, lon0, lons[q], lats[q])
      for q in eachindex(lons)]
 
-# ECMWF's operational IFS forecasts on the public AWS copy of ECMWF open data: four runs a day (00, 06,
+# ECMWF's operational IFS forecasts on the Google Cloud copy of ECMWF open data: four runs a day (00, 06,
 # 12, 18 UTC) from 2024-02-29, on the 0.25° grid with its first column at 180°W. A run's
-# `<run>-0h-oper-fc.index` lists each field's byte range in its GRIB2 file, one JSON object per line.
-const IFS_DATA = "https://ecmwf-forecasts.s3.eu-central-1.amazonaws.com"
+# `<run>-0h-oper-fc.index` lists each field's byte range in its GRIB2 file, one JSON object per line. The
+# AWS copy holds the same files but answers most requests with 503 Slow Down, more than a retry outlasts.
+const IFS_DATA = "https://storage.googleapis.com/ecmwf-open-data"
 const IFS_FIRST = DateTime(2024, 2, 29)
 const IFS_RUN = Dates.Hour(6)
 const IFS_LON0 = -180.0
@@ -307,7 +308,7 @@ published.
 function ifs_pressure_rows(run::DateTime, row0::Int, row1::Int)
     stem = _ifs_run(run)
     status, body = ChunkManifests.http_request(stem * ".index")
-    # The bucket answers a burst of requests with 503 Slow Down.
+    # A bucket may answer a burst of requests with 503 Slow Down.
     for attempt in 1:5
         status == 503 || break
         sleep(0.5 * 2.0^attempt)
