@@ -28,6 +28,7 @@ import SLCDatasets
 include("heap.jl")
 include("gdal.jl")
 include("io.jl")
+include("noproduct.jl")
 include("job.jl")
 include("sceneid.jl")
 include("scenes.jl")

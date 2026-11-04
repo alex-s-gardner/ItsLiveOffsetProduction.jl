@@ -203,17 +203,33 @@ end
 is_aster(s::Setup) = s.job.platform == "AST"
 is_aster(s) = false
 
+# Whether a setup is a radar pair's: Sentinel-1, NISAR L1, or NISAR L2.
+is_radar(s::RadarSetup) = true
+is_radar(s::Setup) = s.job.platform == "NISAR-L2"
+
 function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
                                 filter_tile::Union{Nothing,Int}, masked::Bool, output::String, o::RunOptions,
                                 dir::String)
     q = pair_quality(img)
     warn_quality(s.early.name, s.late.name, q)
-    t0 = time_ns()
-    c = correlate(s, img, pre; filter_tile, cache_io = o.cache_io, masked, scratch = dir)
-    _log(o, "correlate", t0)
-    check_resolved(c, s.early.name, s.late.name, q)
-    t0 = time_ns()
-    path = package(s, c, output; o.tide, o.tide_model)
-    _log(o, "package", t0)
-    return path
+    return try
+        t0 = time_ns()
+        c = correlate(s, img, pre; filter_tile, cache_io = o.cache_io, masked, scratch = dir)
+        _log(o, "correlate", t0)
+        check_resolved(c, s.early.name, s.late.name, q; radar = is_radar(s))
+        t0 = time_ns()
+        path = package(s, c, output; o.tide, o.tide_model)
+        _log(o, "package", t0)
+        path
+    catch err
+        err isa NoProduct || rethrow()
+        _empty_product(s, output, err::NoProduct)
+    end
+end
+
+# The product of a pair with no velocity ([`NoProduct`](@ref)): every offset missing, uncorrected, and
+# `img_pair_info:no_velocity_reason` the refusal's message.
+function _empty_product(s, output::String, err::NoProduct)
+    say("no velocity: " * err.msg * "; writing the product empty")
+    return package(s, empty_correlation(s), output; tide = false, tide_model = "", no_velocity_reason = err.msg)
 end

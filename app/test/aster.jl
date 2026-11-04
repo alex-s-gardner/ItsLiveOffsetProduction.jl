@@ -5,6 +5,7 @@ using AutoriftItsLiveProduction: cmr_granules, aster_acquisition, aster_date, gr
                                  aster_scene_source, aster_identification, UnsaturatedMask, aster_correct,
                                  aster_fit_mask, infer_sensor, opendata_platform
 import ItsLiveOffsetProduction
+import AutoriftItsLiveProduction
 using Dates: DateTime
 using Statistics: median
 
@@ -68,18 +69,44 @@ end
     dx = Float32.(0.25 .+ jitter .+ tilt)                 # cross-track offset (east): constant + jitter + ramp
     dy = Float32.(fill(-0.1, nr, nc))
     ssm = trues(nr, nc)
-    cx, cy, fitted = aster_correct(dx, dy, ssm, x, y, frame)
-    @test fitted
+    cx, cy = aster_correct(dx, dy, ssm, x, y, frame)
     # Jitter and ramp removed; the stable cells' median level is kept for the product's stable shift.
     @test maximum(abs.(cx .- median(dx))) < 0.03
     @test maximum(abs.(cy .+ 0.1f0)) < 0.01
-    # Too few stable cells: the offsets as they were.
-    few = falses(nr, nc); few[1:10, 1:10] .= true
-    @test aster_correct(dx, dy, few, x, y, frame) == (dx, dy, false)
     # The fit's cells: the stable mask when it holds a measurement, else the slowest quarter of the reference.
     refv = ItsLiveOffsetProduction.ReferenceVelocity(Float32[j for i in 1:nr, j in 1:nc], zeros(Float32, nr, nc))
     @test aster_fit_mask(ssm, refv, dx) == ssm
     slow = aster_fit_mask(falses(nr, nc), refv, dx)
     @test all(slow[:, 1:70]) && !any(slow[:, 72:end])
+end
+
+@testset "the ASTER correction is refused where it cannot be trusted" begin
+    nr, nc = 300, 280
+    x = collect(500_000.0 .+ 120.0 .* (0:(nc - 1)))
+    y = collect(7_600_000.0 .- 120.0 .* (0:(nr - 1)))
+    frame = ((0.0, 1.0), (1.0, 0.0))
+    dx = Float32.([0.25 + 0.4 * sin(2π * y[i] / 4700.0) for i in 1:nr, j in 1:nc])
+    dy = fill(-0.1f0, nr, nc)
+    # A quadrant without stable ground: the fit would extrapolate its cubics there.
+    empty_corner = trues(nr, nc); empty_corner[151:end, 141:end] .= false
+    @test_throws AutoriftItsLiveProduction.NoProduct aster_correct(dx, dy, empty_corner, x, y, frame)
+    @test_throws "a quadrant of the scene holds 0 stable cells, fewer than the 1000" aster_correct(
+        dx, dy, empty_corner, x, y, frame)
+    # The floor is on each quadrant: one cell above it in the emptiest is accepted, one below refused.
+    function corner(n)
+        m = trues(nr, nc); m[151:end, 141:end] .= false
+        m[CartesianIndices((151:300, 141:280))[1:n]] .= true
+        return m
+    end
+    @test aster_correct(dx, dy, corner(1000), x, y, frame) isa Tuple
+    @test_throws "holds 999 stable cells" aster_correct(dx, dy, corner(999), x, y, frame)
+    # A residual the fit's terms cannot express (a 1.6 px step across the scene): refused on held-out ground.
+    stepped = dx .+ Float32.([isodd(div(i - 1, 40)) ? 1.6 : 0.0 for i in 1:nr, j in 1:nc])
+    @test_throws "px on held-out stable ground, more than 1.2" aster_correct(stepped, dy, trues(nr, nc), x, y, frame)
+    # Stable ground too sparse for any 1 km block to hold 10 cells: the residual cannot be measured.
+    sparse = falses(nr, nc); sparse[1:3:end, 1:3:end] .= true
+    @test_throws "cannot be measured" aster_correct(dx, dy, sparse, x, y, frame)
+    # No measured offsets at all.
+    @test_throws "no measured offsets" aster_correct(fill(NaN32, nr, nc), dy, trues(nr, nc), x, y, frame)
 end
 

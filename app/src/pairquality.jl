@@ -117,14 +117,18 @@ function warn_quality(early::String, late::String, q::PairQuality)
 end
 
 """
-    check_resolved(c::Correlation, early, late, q)
+    check_resolved(c::Correlation, early, late, q; radar)
 
-Throw, naming the pair and its diagnostics, when no point of the correlation resolved: a product with no
-velocity at all is never a result, whatever the reason.
+Throw, naming the pair and its diagnostics, when no point of the correlation resolved: [`NoProduct`](@ref),
+except for a `radar` pair whose images [`quality_warnings`](@ref) finds nothing wrong with. There an empty
+result points at the pair's geometry or resampling, not the scenes, so it is an error and writes nothing.
 """
-function check_resolved(c::Correlation, early::String, late::String, q::PairQuality)
-    any(!iszero, c.chip_size) && return nothing
+function check_resolved(c::Correlation, early::String, late::String, q::PairQuality; radar::Bool)
+    resolved(c) && return nothing
     w = quality_warnings(q)
-    throw(ErrorException("no point of the pair resolved, so no product is written" *
-                         (isempty(w) ? "" : "; " * join(w, "; ")) * ". " * quality_report(early, late, q)))
+    report = quality_report(early, late, q)
+    radar && isempty(w) && throw(ErrorException(
+        "no point of the radar pair resolved, though neither image is empty or flat, so no product is written. " *
+        report))
+    throw(NoProduct("no point of the pair resolved" * (isempty(w) ? "" : "; " * join(w, "; ")) * ". " * report))
 end

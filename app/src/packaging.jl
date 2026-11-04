@@ -96,6 +96,13 @@ function product_source(info::ItsLiveOffsetProduction.ImagePairInfo)
     return s
 end
 
+# Whether any point of `c` resolved.
+resolved(c::Correlation) = any(!iszero, c.chip_size)
+
+# `roi_valid_percentage` of `c`: 0 for a correlation that searched nothing, whose percentage has no denominator.
+valid_percentage(c::Correlation) =
+    any(!iszero, c.search) ? ItsLiveOffsetProduction.roi_valid_percentage(c.chip_size, c.search) : 0.0
+
 """
     write_named_product(output, early, late, roi, input) -> String
 
@@ -124,11 +131,13 @@ A NISAR L2 pair's offsets over polar floating ice and ocean first have the tide 
 removed ([`tide_correct`](@ref)) when `tide` is set, with the region's own tide model or, when not empty,
 `tide_model`. An ASTER pair's offsets have the L1T product's distortion and jitter removed
 ([`aster_correct`](@ref)), fitted over the stable surface; the constant shift is left for the product's own
-stable-surface correction. `img_pair_info:geometric_correction_flag` records whether the fit was made (1) or
-the scene had too little stable surface for it (0), and `geometric_correction` describes the fit when it was
-(nasa-jpl/its_live_production#68). Any other optical pair is not corrected.
+stable-surface correction, and a pair the fit cannot be trusted on is refused ([`NoProduct`](@ref)).
+`img_pair_info:geometric_correction` describes the fit and `geometric_correction_flag` is 1
+(nasa-jpl/its_live_production#68). Any other optical pair is not corrected, nor is a correlation that resolved
+nothing.
 """
-function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String) where {F}
+function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String,
+                 no_velocity_reason::String = "") where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
@@ -137,22 +146,21 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool
     py = abs(s.pair.coordinate.spacing[2])
     georef = ItsLiveOffsetProduction.ItsLiveGeoref(x, y, ItsLiveOffsetProduction.cf_grid_mapping(s.region.epsg),
                                                    lonlat, px, py)
-    roi = ItsLiveOffsetProduction.roi_valid_percentage(c.chip_size, c.search)
+    roi = valid_percentage(c)
     info = native_img_pair_info(s, roi)
+    isempty(no_velocity_reason) || (info.extra["no_velocity_reason"] = no_velocity_reason)
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
     dx, dy = tide ? tide_correct(s, x, y, lonlat, c.dx, c.dy, info, tide_model) : (c.dx, c.dy)
-    if is_aster(s)
+    if is_aster(s) && resolved(c)
         # The offsets less the reference motion, so the fit sees only the geometry's error; added back after.
         dxr, dyr = ItsLiveOffsetProduction.reference_offsets(coeffs, refv)
         fit = aster_fit_mask(ssm, refv, dx)
-        cx, cy, fitted = aster_correct(Float32.(dx .- dxr), Float32.(dy .- dyr), fit, x, y,
-                                       aster_track_frame(s.early.band, s.region.epsg))
+        cx, cy = aster_correct(Float32.(dx .- dxr), Float32.(dy .- dyr), fit, x, y,
+                               aster_track_frame(s.early.band, s.region.epsg))
         dx, dy = Float32.(cx .+ dxr), Float32.(cy .+ dyr)
-        if fitted
-            info.extra["geometric_correction"] = ASTER_GEOMETRIC_CORRECTION
-            info.extra["geometric_correction_flag"] = Int64(1)
-        end
+        info.extra["geometric_correction"] = ASTER_GEOMETRIC_CORRECTION
+        info.extra["geometric_correction_flag"] = Int64(1)
     end
     input = ItsLiveOffsetProduction.ItsLiveInput(
         :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,
@@ -167,10 +175,12 @@ end
 [`package`](@ref) with the grid CRS's own transform to longitude and latitude — one concrete type per
 branch.
 """
-function package(s::Setup, c::Correlation, output::String; tide::Bool = true, tide_model::String = "")
+function package(s::Setup, c::Correlation, output::String; tide::Bool = true, tide_model::String = "",
+                 no_velocity_reason::String = "")
     g = FGP.native_crs(s.region.epsg)
-    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
+    g isa FGP.UTMCRS &&
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model, no_velocity_reason)
     g isa FGP.PolarStereographicCRS &&
-        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model, no_velocity_reason)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(s.region.epsg)))
 end

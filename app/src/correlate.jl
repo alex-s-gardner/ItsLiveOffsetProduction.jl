@@ -20,7 +20,7 @@ function driver_chip_size_max(g::PairGeometry, declined::Matrix{Bool})
         (declined[i] || v == sentinel) && continue
         best = max(best, Int(v))
     end
-    best > 0 || throw(ArgumentError("every chip-size maximum is declined or missing, so no pyramid level could run"))
+    best > 0 || throw(NoProduct("every chip-size maximum is declined or missing, so no pyramid level could run"))
     return best
 end
 
@@ -75,6 +75,19 @@ struct Correlation
     grid_spacing_x::Float64
 end
 
+"""
+    empty_correlation(s) -> Correlation
+
+A correlation of setup `s` that resolved nothing, on the grid [`correlate`](@ref) gives: every offset NaN,
+every chip size and search limit zero.
+"""
+function empty_correlation(s)
+    g = s.geometry
+    n = reverse(size(g.location_x))
+    return Correlation(fill(NaN32, n), fill(NaN32, n), zeros(UInt16, n), zeros(Bool, n), zeros(Int32, n),
+                       AutoRIFT.chip_size_scale(g), 0.0)
+end
+
 # `A` pasted into the top-left corner of an `origsize` array of `filler` (`testautoRIFT.py:792-805`): the
 # reference allocates every output at the pre-chop size, so the strip the chop dropped reaches the product
 # as no-data.
@@ -117,9 +130,8 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     g = s.geometry
     aster = is_aster(s)
     sentinel = Int32(g.nodata.output)
-    any(v -> v != sentinel && v > 0, g.search_x) || throw(ErrorException(
-        "the parameter files give no search range anywhere the two scenes overlap, so no point is " *
-        "correlated and no product is written"))
+    any(v -> v != sentinel && v > 0, g.search_x) || throw(NoProduct(
+        "the parameter files give no search range anywhere the two scenes overlap, so no point is correlated"))
     declined = img.declined
     cmax = driver_chip_size_max(g, declined)
     scale = AutoRIFT.chip_size_scale(g)

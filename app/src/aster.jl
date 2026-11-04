@@ -154,8 +154,16 @@ const ASTER_ALONG_JITTER = (4000.0, 5600.0)
 const ASTER_CROSS_JITTER = (5500.0, 9500.0)
 # Profiles of the stable-surface offsets are binned at the product's grid spacing.
 const ASTER_PROFILE_BIN = 120.0
-# Fewer stable cells than this, and the scene keeps the product's constant stable shift alone.
-const ASTER_MIN_STABLE = 2000
+# The fewest stable cells each quadrant of the scene (in the track frame) must hold for the fit to be trusted
+# there: a fit carries its cubics and sinusoids, unconstrained, into a quadrant without stable ground.
+const ASTER_MIN_QUADRANT_STABLE = 1000
+# The largest held-out residual a fit may leave, in pixels ([`aster_held_out_residual`](@ref)), and the
+# checkerboard and blocks it is measured on: 4 km squares and 1 km blocks of 120 m cells, a block counted
+# where it holds at least `ASTER_BLOCK_MIN` stable cells.
+const ASTER_MAX_HELD_OUT_RESIDUAL = 1.2
+const ASTER_CHECKER = 33
+const ASTER_BLOCK = 8
+const ASTER_BLOCK_MIN = 10
 
 """
     aster_track_frame(band, epsg) -> (time, detector)
@@ -196,7 +204,7 @@ function aster_track_frame(band::String, epsg::Int)
 end
 
 """
-    aster_correct(dx, dy, ssm, x, y, frame) -> (dx, dy, fitted)
+    aster_correct(dx, dy, ssm, x, y, frame) -> (dx, dy)
 
 `dx`, `dy` (pixels, on the product grid at cell centres `x`, `y`) with the ASTER L1T distortion removed, as
 fitted over the stable surface `ssm`: per offset component, a quadratic in map position, cubics in the
@@ -206,20 +214,94 @@ and at its cross-track jitter wavelength. The fit is a Tukey-biweight robust lea
 the correlator got wrong does not pull it. The constant term is left in the offsets: the product's own
 stable-surface shift removes it, and records it as it does for every optical pair.
 
-`fitted` is whether the fit was made: a scene with fewer than [`ASTER_MIN_STABLE`](@ref) stable cells is
-returned as it is, with `fitted` false.
+The fit is refused — a [`NoProduct`](@ref) naming the reason, so the product is written empty — where it
+cannot be trusted: when a quadrant of the scene, in the track frame, holds fewer than
+[`ASTER_MIN_QUADRANT_STABLE`](@ref) stable cells, or when a fit to half the stable surface leaves more than
+[`ASTER_MAX_HELD_OUT_RESIDUAL`](@ref) pixels on the other half, or a residual there that cannot be measured
+([`aster_held_out_residual`](@ref)). Either leaves an error of pixels that is smooth across the scene, which
+looks like ice flow and cannot be filtered afterwards.
 """
 function aster_correct(dx::Matrix{Float32}, dy::Matrix{Float32}, ssm::AbstractMatrix{Bool},
                        x::Vector{Float64}, y::Vector{Float64}, frame)
     nr, nc = size(dx)
     (length(y), length(x)) == (nr, nc) || throw(DimensionMismatch("the offsets and the grid differ in size"))
     fit = ssm .& isfinite.(dx) .& isfinite.(dy)
-    count(fit) < ASTER_MIN_STABLE && return dx, dy, false
     tv, dv = frame
     X = repeat(x', nr); Y = repeat(y, 1, nc)
     S = tv[1] .* X .+ tv[2] .* Y           # along-track (acquisition time) position, m
     T = dv[1] .* X .+ dv[2] .* Y           # cross-track (detector) position, m
+    n = minimum(count(fit .& q) for q in _track_quadrants(S, T, isfinite.(dx) .& isfinite.(dy)))
+    n < ASTER_MIN_QUADRANT_STABLE && throw(NoProduct(
+        "a quadrant of the scene holds " * string(n) * " stable cells, fewer than the " *
+        string(ASTER_MIN_QUADRANT_STABLE) * " the ASTER geometric correction needs there"))
     ddx, ddy = Float64.(dx), Float64.(dy)
+    held = aster_held_out_residual(ddx, ddy, fit, X, Y, S, T, dv)
+    isfinite(held) || throw(NoProduct(
+        "the held-out residual of the ASTER geometric correction cannot be measured: held-out stable ground has " *
+        "no 1 km block of " * string(ASTER_BLOCK_MIN) * " cells"))
+    held > ASTER_MAX_HELD_OUT_RESIDUAL && throw(NoProduct(
+        "the ASTER geometric correction leaves " * string(round(held; digits = 2)) * " px on held-out stable " *
+        "ground, more than " * string(ASTER_MAX_HELD_OUT_RESIDUAL)))
+    fx, fy = _aster_fit(ddx, ddy, fit, X, Y, S, T, dv)
+    # Keep the constant: subtract the fit minus its value at the stable cells' median.
+    cx = _median_nonan(fx[fit]); cy = _median_nonan(fy[fit])
+    return Float32.(ddx .- (fx .- cx)), Float32.(ddy .- (fy .- cy))
+end
+
+# The four quadrants of the cells `meas`, in the track frame: split at the middle of their along-track (S)
+# and cross-track (T) ranges.
+function _track_quadrants(S, T, meas::BitMatrix)
+    any(meas) || throw(NoProduct("the scene holds no measured offsets"))
+    s0, s1 = extrema(S[meas]); t0, t1 = extrema(T[meas])
+    sm, tm = (s0 + s1) / 2, (t0 + t1) / 2
+    return [(S .< sm) .& (T .< tm), (S .< sm) .& (T .>= tm), (S .>= sm) .& (T .< tm), (S .>= sm) .& (T .>= tm)]
+end
+
+"""
+    aster_held_out_residual(dx, dy, fit, X, Y, S, T, dv) -> Float64
+
+The residual, in pixels, an ASTER fit leaves on stable ground it was not fitted to. The stable cells `fit` are
+split into the two colors of a checkerboard of [`ASTER_CHECKER`](@ref)-cell squares; each color is fitted
+and the residual on the other is taken in [`ASTER_BLOCK`](@ref)-cell blocks, as the distance of each block's
+median offset from the median over blocks. The result is the mean of the two colors' 90th percentiles; NaN
+when a color is empty or has no block of at least [`ASTER_BLOCK_MIN`](@ref) cells. `X`, `Y`, `S`, `T` are the
+grid's map and track-frame positions and `dv` the detector direction, as in [`aster_correct`](@ref).
+"""
+function aster_held_out_residual(dx::Matrix{Float64}, dy::Matrix{Float64}, fit::BitMatrix, X, Y, S, T, dv)
+    nr, nc = size(dx)
+    sq = BitMatrix([isodd(div(i - 1, ASTER_CHECKER) + div(j - 1, ASTER_CHECKER)) for i in 1:nr, j in 1:nc])
+    p = 0.0
+    for train in (fit .& sq, fit .& .!sq)
+        (any(train) && any(fit .& .!train)) || return NaN
+        fx, fy = _aster_fit(dx, dy, train, X, Y, S, T, dv)
+        p += _block_spread_p90(dx .- fx, dy .- fy, fit .& .!train) / 2
+    end
+    return p
+end
+
+# The 90th percentile of the distance of each block's median `(rx, ry)` over `m` from the median over blocks.
+function _block_spread_p90(rx::Matrix{Float64}, ry::Matrix{Float64}, m::BitMatrix)
+    k = ASTER_BLOCK
+    bx, by = Float64[], Float64[]
+    for j in 1:(size(rx, 2) ÷ k), i in 1:(size(rx, 1) ÷ k)
+        I, J = ((i - 1) * k + 1):(i * k), ((j - 1) * k + 1):(j * k)
+        mm = view(m, I, J)
+        count(mm) >= ASTER_BLOCK_MIN || continue
+        push!(bx, _median_nonan(view(rx, I, J)[mm])); push!(by, _median_nonan(view(ry, I, J)[mm]))
+    end
+    isempty(bx) && return NaN
+    mx, my = _median_nonan(bx), _median_nonan(by)
+    d = sort!(hypot.(bx .- mx, by .- my))
+    # Linear between order statistics, as `Statistics.quantile` takes it.
+    h = (length(d) - 1) * 0.9 + 1
+    lo = floor(Int, h)
+    return lo >= length(d) ? d[end] : d[lo] + (h - lo) * (d[lo + 1] - d[lo])
+end
+
+# Robust fits to `dx` and `dy` over the cells `fit` of the quadratic, the track cubics and the jitter sinusoids,
+# evaluated at every cell; the jitter wavelengths are found from `fit`'s own cross-track offsets.
+function _aster_fit(ddx::Matrix{Float64}, ddy::Matrix{Float64}, fit::BitMatrix, X, Y, S, T, dv)
+    nr, nc = size(ddx)
     # The jitter wavelengths, from the cross-track offset after the quadratic. The detector direction is
     # within a few tens of degrees of east–west or north–south, so one map component carries most of it.
     cross = abs(dv[1]) >= abs(dv[2]) ? ddx : ddy
@@ -228,11 +310,7 @@ function aster_correct(dx::Matrix{Float32}, dy::Matrix{Float32}, ssm::AbstractMa
     ls = _peak_wavelength(S, rq, fit, ASTER_ALONG_JITTER)
     lt = _peak_wavelength(T, rq, fit, ASTER_CROSS_JITTER)
     G = hcat(Gq, _track_columns(S, T, fit, ls, lt))
-    fx = reshape(_robust_fit(G, vec(ddx), vec(fit)), nr, nc)
-    fy = reshape(_robust_fit(G, vec(ddy), vec(fit)), nr, nc)
-    # Keep the constant: subtract the fit minus its value at the stable cells' median.
-    cx = _median_nonan(fx[fit]); cy = _median_nonan(fy[fit])
-    return Float32.(ddx .- (fx .- cx)), Float32.(ddy .- (fy .- cy)), true
+    return reshape(_robust_fit(G, vec(ddx), vec(fit)), nr, nc), reshape(_robust_fit(G, vec(ddy), vec(fit)), nr, nc)
 end
 
 _median_nonan(v) = ItsLiveOffsetProduction._median_nonan(v)
