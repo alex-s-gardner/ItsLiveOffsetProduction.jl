@@ -9,6 +9,10 @@ autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [options]
 
 The sensor, when omitted, is the reference's (`infer_sensor` in `src/production.jl`); the output, when
 omitted, is the product's ITS_LIVE name (`<ref>_X_<sec>_G0120V02_P<valid>.nc`) in the working directory.
+A pair that deterministically yields no velocity (nothing resolved, nothing to search, or an ASTER pair whose
+geometric correction cannot be trusted) is still written, empty, as a `_P000.nc` with the reason in
+`img_pair_info:no_velocity_reason`, so production records it as processed; any other failure writes nothing.
+A radar pair that resolves nothing although neither image is empty or flat is such a failure.
 `--bucket` and `--bucket-prefix` upload the product to S3 when it is written, with its browse image and
 thumbnail (`src/browse.jl`, pixel for pixel what `hyp3-autorift` draws) and its catalog records: the STAC item
 and NSIDC premet and spatial files `itslive-metadata` writes (`src/catalog.jl`). `--publish-bucket` publishes

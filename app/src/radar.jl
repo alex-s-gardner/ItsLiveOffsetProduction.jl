@@ -662,15 +662,18 @@ Over polar floating ice and ocean the range offsets first have the tide and inve
 the acquisitions removed ([`tide_correct`](@ref)) when `tide` is set, with the region's own tide model or,
 when not empty, `tide_model`.
 """
-function package(s::RadarSetup, c::Correlation, output::String; tide::Bool = true, tide_model::String = "")
+function package(s::RadarSetup, c::Correlation, output::String; tide::Bool = true, tide_model::String = "",
+                 no_velocity_reason::String = "")
     g = FGP.native_crs(s.region.epsg)
-    g isa FGP.UTMCRS && return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
+    g isa FGP.UTMCRS &&
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model, no_velocity_reason)
     g isa FGP.PolarStereographicCRS &&
-        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model)
+        return package(s, c, output, FGP.Transformation(g, FGP.GeographicCRS()), tide, tide_model, no_velocity_reason)
     throw(ArgumentError("a product grid is UTM or polar stereographic, not EPSG:" * string(s.region.epsg)))
 end
 
-function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String) where {F}
+function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide::Bool, tide_model::String,
+                 no_velocity_reason::String = "") where {F}
     gt = ImagePairGeometry.window_geotransform(s.grid, s.window)
     nx, ny = size(s.window)
     x = collect(gt[1] + gt[2] / 2 .+ (0:(nx - 1)) .* gt[2])
@@ -679,9 +682,12 @@ function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide:
     px = coord.dr / sin(coord.incidence_angle)
     georef = ItsLiveOffsetProduction.ItsLiveGeoref(x, y, ItsLiveOffsetProduction.cf_grid_mapping(s.region.epsg),
                                                    lonlat, px, px)
-    roi = ItsLiveOffsetProduction.roi_valid_percentage(c.chip_size, c.search)
+    roi = valid_percentage(c)
     lon, lat = radar_centroid(s)
     info, swath_bias = _radar_info(s, c, roi, lon, lat)
+    isempty(no_velocity_reason) || (info.extra["no_velocity_reason"] = no_velocity_reason)
+    # A correlation that resolved nothing has no subswath bias to measure.
+    resolved(c) || (swath_bias = nothing)
     coeffs = ItsLiveOffsetProduction.coefficients(s.geometry)
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
     dx = tide ? tide_correct(s, x, y, lonlat, c.dx, info, tide_model) : c.dx

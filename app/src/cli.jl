@@ -242,6 +242,7 @@ end
         end
     end
     m = err isa ArgumentError ? err.msg :
+        err isa NoProduct ? err.msg :
         err isa ErrorException ? err.msg :
         err isa DimensionMismatch ? err.msg :
         err isa SystemError ? err.prefix * ": " * Libc.strerror(err.errnum) :
