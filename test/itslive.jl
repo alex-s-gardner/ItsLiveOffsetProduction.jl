@@ -275,6 +275,8 @@ end
                 d = Dict{String,Any}(name => (attrib = Dict(ds[name].attrib), data = collect(skipmissing(ds[name][:, :, 1])))
                                      for name in ("vx", "vy", "vr", "va"))
                 d["img_pair_info"] = (attrib = Dict(ds["img_pair_info"].attrib), data = nothing)
+                d["chunks"] = Dict(n => chunking(ds[n].var) for n in ("time", "img_pair_info"))
+                d["references"] = ds.attrib["references"]
                 d
             end
         finally
@@ -293,6 +295,12 @@ end
         ImagePairInfo(DateTime(2020, 1, 1), DateTime(2020, 1, 13), "T", "T", "1", "1", 80.0, 65.0, -45.0,
                       Dict{String,Any}())) == "Terra ASTER"
     # Every product records whether a tide or a geometric correction was removed: 0 unless the producer says so.
+    # One chunk per time step along the unlimited `time`.
+    @test s1["chunks"] == Dict("time" => (:chunked, (1,)), "img_pair_info" => (:chunked, (1,)))
+    @test occursin("AutoRIFT.jl: https://doi.org/10.5281/zenodo.24147369", s1["references"])
+    @test occursin("ItsLiveOffsetProduction.jl: https://github.com/alex-s-gardner/ItsLiveOffsetProduction.jl",
+                   s1["references"])
+    @test !occursin("HyP3 autoRIFT plugin", s1["references"])
     plain = s1["img_pair_info"].attrib
     @test (plain["tide_correction_flag"], plain["geometric_correction_flag"]) == (0, 0)
     corrected = written("T", "1"; extra = Dict("geometric_correction_flag" => Int64(1),

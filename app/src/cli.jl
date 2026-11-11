@@ -54,6 +54,8 @@ options:
                        one crossing the antimeridian split at ±180° as OPERA's frames are; the pair is
                        the bursts both scenes hold at least half of whose footprint it covers, read out
                        of the zips
+  --frame-id ID        S1, S1BURST: the OPERA frame the pair lies in, recorded as the product's
+                       frame_img1/frame_img2 and its STAC item's scene_1_frame/scene_2_frame
   --bucket NAME        upload the product, its browse image (<product>.png), its thumbnail
                        (<product>_thumb.png) and its catalog records (<product>.stac.json,
                        <product>.nc.premet, <product>.nc.spatial) to this S3 bucket, with the AWS
@@ -86,10 +88,10 @@ zips, which are read with the same credentials; either way into the run's scratc
     Arguments
 
 A parsed command line: the job's inputs, the output path, the run options, the heap hint, the burst
-subset polygon, the bucket and prefix the product is uploaded to, and the Open Data bucket it is published
-to. The sensor, the output path, the polygon and the buckets are empty when not given: the sensor is then the reference's
-([`infer_sensor`](@ref)), the product named as ITS_LIVE names it in the working directory, and nothing
-uploaded.
+subset polygon, the OPERA frame ID, the bucket and prefix the product is uploaded to, and the Open Data
+bucket it is published to. The sensor, the output path, the polygon, the frame ID and the buckets are empty
+when not given: the sensor is then the reference's ([`infer_sensor`](@ref)), the product named as ITS_LIVE
+names it in the working directory, and nothing uploaded.
 """
 struct Arguments
     sensor::String
@@ -99,6 +101,7 @@ struct Arguments
     options::RunOptions
     heap_hint_gib::Float64
     subset::String
+    frame_id::String
     bucket::String
     bucket_prefix::String
     publish_bucket::String
@@ -131,6 +134,7 @@ function parse_args(args::Vector{String})
     tide = true
     tide_model = ""
     subset = ""
+    frame_id = ""
     bucket = ""
     bucket_prefix = ""
     publish_bucket = ""
@@ -148,7 +152,7 @@ function parse_args(args::Vector{String})
             end
             isempty(list) && throw(ArgumentError(a * " needs at least one scene"))
         elseif a in ("--scratch", "--cache-io", "--filter-tile", "--heap-hint-gib", "--dem", "--orbit-dir", "--subset",
-                 "--bucket", "--bucket-prefix", "--publish-bucket", "--tide-model")
+                 "--frame-id", "--bucket", "--bucket-prefix", "--publish-bucket", "--tide-model")
             i < length(args) || throw(ArgumentError(a * " needs a value"))
             v = args[i + 1]
             # An unset value leaves the option's default, as if it were not given.
@@ -167,6 +171,8 @@ function parse_args(args::Vector{String})
                 tide_model = startswith(v, "/vsi") ? v : gdal_path(v)
             elseif a == "--subset"
                 subset = v
+            elseif a == "--frame-id"
+                frame_id = String(strip(v))
             elseif a == "--bucket"
                 bucket = v
             elseif a == "--bucket-prefix"
@@ -221,8 +227,8 @@ function parse_args(args::Vector{String})
     end
     (isempty(bucket) && !isempty(bucket_prefix)) && throw(ArgumentError("--bucket-prefix needs --bucket"))
     return Arguments(sensor, reference, secondary, output,
-                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide, tide_model), hint, subset, bucket,
-                     bucket_prefix, publish_bucket)
+                     RunOptions(scratch, cache_io, filter_tile, verbose, dem, orbit_dir, tide, tide_model), hint, subset, frame_id,
+                     bucket, bucket_prefix, publish_bucket)
 end
 
 # An exception's message without Base's printer, which a trimmed binary does not have for an arbitrary
@@ -274,7 +280,7 @@ function julia_main(args::Vector{String} = ARGS)::Cint
         AutoRIFT.WORKSPACE_POOL_BYTES[] = WORKSPACE_POOL_BYTES
         with_earthdata_netrc() do
             sensor = isempty(a.sensor) ? infer_sensor(a.reference; a.subset) : a.sensor
-            job = Job(sensor, a.reference, a.secondary; subset = a.subset)
+            job = Job(sensor, a.reference, a.secondary; a.subset, a.frame_id)
             path = run_job(job, a.output; options = a.options)
             say("wrote " * path)
             for uri in deliver(path, job.platform; a.bucket, a.bucket_prefix, a.publish_bucket)

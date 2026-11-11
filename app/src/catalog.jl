@@ -140,17 +140,17 @@ end
 # The frames of a pair's scenes, as the reference reads them: a Landsat scene's path and row, a Sentinel-2
 # product's tile, a NISAR granule's relative orbit, direction and frame, and a Sentinel-1 product's
 # `frame_img1`/`frame_img2`. For Landsat, Sentinel-2 and NISAR the second frame is the first scene's: the
-# reference splits the first scene's ID for both.
+# reference splits the first scene's ID for both. Empty for a frame the product does not know (`"N/A"` in a
+# product written by the reference), which the item leaves out.
 function scene_frames(s::ItsLiveOffsetProduction.ProductSummary, mission::String)
-    startswith(mission, "S1") && return _na(s.frame_img1), _na(s.frame_img2)
+    startswith(mission, "S1") && return _known(s.frame_img1), _known(s.frame_img2)
     parts = split(s.id_img1, '_')
     f = startswith(mission, "L") ? String(parts[3]) : startswith(mission, "S2") ? String(parts[6]) :
-        startswith(mission, "N") ? join(parts[6:8], "_") : "N/A"
+        startswith(mission, "N") ? join(parts[6:8], "_") : ""
     return f, f
 end
 
-# An attribute the product does not carry, as the reference writes it.
-_na(s::String) = isempty(s) ? "N/A" : s
+_known(s::String) = s == "N/A" ? "" : s
 
 # A JSON string, as `json.dumps` escapes one: every value here is ASCII text without control characters
 # but a quote or backslash.
@@ -167,9 +167,10 @@ _lonlat(v::Tuple{Float64,Float64}) = _json_list((_json_num(v[1]), _json_num(v[2]
 The STAC item of product `id`, summarized by `s`, with footprint `fp`, published at `uri`
 (`s3://bucket/prefix/<product>.nc`), whose browse image and thumbnail sit beside it: the document
 `pystac.Item.to_dict` gives the item `cryoforge`'s `create_stac_item` builds, its keys in that order,
-except for a product without a flight direction (an optical one): its item has neither `sat:orbit_state`
-nor the sat extension, where `cryoforge` writes `"N/A"`, which the extension's schema rejects
-(nasa-jpl/its_live_production#49).
+compact, as `json.dumps(…, separators = (",", ":"))` writes it ([`indent_json`](@ref) lays it out). Where
+`cryoforge` writes `"N/A"` the item leaves the property out: `sat:orbit_state` and the sat extension for a
+product without a flight direction (an optical one), whose `"N/A"` the extension's schema rejects
+(nasa-jpl/its_live_production#49), and `scene_1_frame`/`scene_2_frame` for a product that records no frame.
 """
 function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326, id::String, uri::String)
     mission = String(first(split(s.id_img1, '_')))
@@ -182,8 +183,10 @@ function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326,
         "mid_datetime" => _json_str(mid), "created" => _json_str(created), "updated" => _json_str(updated),
         "latitude" => _json_num(_py_round(fp.center[2], 4)), "longitude" => _json_num(_py_round(fp.center[1], 4)),
         "date_dt" => _json_num(round(s.date_dt)), "platform" => _json_str(mission),
-        "scene_1_id" => _json_str(s.id_img1), "scene_2_id" => _json_str(s.id_img2),
-        "scene_1_frame" => _json_str(f1), "scene_2_frame" => _json_str(f2)]
+        "scene_1_id" => _json_str(s.id_img1), "scene_2_id" => _json_str(s.id_img2)]
+    for (k, f) in ("scene_1_frame" => f1, "scene_2_frame" => f2)
+        isempty(f) || push!(props, k => _json_str(f))
+    end
     isempty(orbit) || push!(props, "sat:orbit_state" => _json_str(orbit))
     append!(props, (
         "start_datetime" => _json_str(iso_utc(parse_pair_date(s.acquisition_date_img1))),
@@ -208,6 +211,60 @@ function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326,
                                "thumbnail" => image("_thumb.png", "thumbnail"))),
         "collection" => _json_str("itslive-granules")))
 end
+
+"""
+    indent_json(s) -> String
+
+Compact JSON `s` laid out as `json.dumps(…, indent = 2)` lays it out: each member and element on a line of
+its own, indented two spaces a level, `": "` after a key, and an empty object or array kept as `{}` or `[]`.
+Strings are copied as they are.
+"""
+function indent_json(s::String)
+    io = IOBuffer(; sizehint = 2 * ncodeunits(s))
+    cu = codeunits(s)
+    depth = 0
+    instr = false
+    i = 1
+    while i <= length(cu)
+        c = cu[i]
+        if instr
+            write(io, c)
+            if c == UInt8('\\')
+                i += 1
+                write(io, cu[i])
+            elseif c == UInt8('"')
+                instr = false
+            end
+        elseif c == UInt8('"')
+            instr = true
+            write(io, c)
+        elseif c == UInt8('{') || c == UInt8('[')
+            write(io, c)
+            if i < length(cu) && (cu[i + 1] == UInt8('}') || cu[i + 1] == UInt8(']'))
+                i += 1
+                write(io, cu[i])
+            else
+                depth += 1
+                _newline!(io, depth)
+            end
+        elseif c == UInt8('}') || c == UInt8(']')
+            depth -= 1
+            _newline!(io, depth)
+            write(io, c)
+        elseif c == UInt8(',')
+            write(io, c)
+            _newline!(io, depth)
+        elseif c == UInt8(':')
+            write(io, UInt8(':'), UInt8(' '))
+        else
+            write(io, c)
+        end
+        i += 1
+    end
+    return String(take!(io))
+end
+
+_newline!(io::IOBuffer, depth::Int) = (write(io, UInt8('\n')); write(io, repeat(" ", 2 * depth)); nothing)
 
 # ---------------------------------------------------------------------------
 # NSIDC's premet and spatial files
@@ -268,7 +325,7 @@ function write_catalog_records(product::String, uri::String)
     id = String(chopsuffix(basename(uri), ".nc"))
     stem = joinpath(dirname(product), id)
     item, pm, sp = stem * ".stac.json", stem * ".nc.premet", stem * ".nc.spatial"
-    write(item, item_json(s, fp, id, uri))
+    write(item, indent_json(item_json(s, fp, id, uri)))
     write(pm, premet(s, id))
     write(sp, spatial(fp))
     return item, pm, sp

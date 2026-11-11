@@ -6,7 +6,7 @@ using AutoriftItsLiveProduction.AutoRIFT: GardnerFilter
 import AutoriftItsLiveProduction
 
 job(platform, ref, sec) = Job(platform, platform, SceneSource(ref, ref, "", "", ""),
-                              SceneSource(sec, sec, "", "", ""), ref * "_X_" * sec)
+                              SceneSource(sec, sec, "", "", ""), ref * "_X_" * sec, "")
 
 @testset "each sensor's displacement filter" begin
     for p in ("S2", "S1-SLC", "S1-BURST")

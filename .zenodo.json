@@ -1,0 +1,10 @@
+{
+  "title": "ItsLiveOffsetProduction.jl: ITS_LIVE image-pair velocity production",
+  "upload_type": "software",
+  "creators": [
+    {"name": "Gardner, Alex S.", "affiliation": "NASA Jet Propulsion Laboratory, California Institute of Technology"},
+    {"name": "Kennedy, Joseph H.", "affiliation": "Alaska Satellite Facility, University of Alaska Fairbanks"}
+  ],
+  "license": "MIT",
+  "keywords": ["computer vision", "glacier velocity", "ITS_LIVE", "Sentinel-1", "Landsat", "NISAR", "Julia"]
+}

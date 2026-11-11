@@ -45,8 +45,8 @@ const REFERENCES = join([
     "  https://doi.org/10.3390/rs13040749",
     "",
     "Additionally, DOI's are provided for the software used to generate this data:",
-    "* autoRIFT: https://doi.org/10.5281/zenodo.4025445",
-    "* HyP3 autoRIFT plugin: https://doi.org/10.5281/zenodo.4037016",
+    "* AutoRIFT.jl: https://doi.org/10.5281/zenodo.24147369",
+    "* ItsLiveOffsetProduction.jl: https://github.com/alex-s-gardner/ItsLiveOffsetProduction.jl",
     "* HyP3 processing environment: https://doi.org/10.5281/zenodo.3962581",
 ], "\n")
 
@@ -574,7 +574,9 @@ end
 
 function _defvar_scalar!(f::NcFile, name::String, fillvalue::T, attrs::Dict{String,AttrValue},
                          dims::Tuple{Vararg{String}} = ()) where {T}
-    v = def_var!(f, name, T, dims; fillvalue)
+    # A variable along the unlimited `time` holds one chunk per step, as the reference stores it, not the
+    # library's default of thousands.
+    v = def_var!(f, name, T, dims; fillvalue, chunks = dims == ("time",) ? (1,) : nothing)
     for (k, val) in attrs
         put_attvalue!(v, k, val)
     end
@@ -1024,7 +1026,7 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
         _defvar_coord!(ds, "y", y, "projection_y_coordinate", "y coordinate of projection"; fillvalue = coord_fill)
 
         if cropped
-            t = def_var!(ds, "time", Float64, ("time",); fillvalue = NaN)
+            t = _defvar_scalar!(ds, "time", NaN, Dict{String,AttrValue}(), ("time",))
             jitter_us = mod(hash(basename(path)), 1_000_000)
             seconds = (Dates.value(date_center_dt - GPS_EPOCH) * 1000 + jitter_us) / 1.0e6
             put_var!(t, [seconds]; start = (0,), count = (1,))

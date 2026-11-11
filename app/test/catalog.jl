@@ -6,7 +6,7 @@
 # product name runs to 196 characters, past what a Windows checkout can write.
 
 using AutoriftItsLiveProduction: write_catalog_records, parse_pair_date, parse_created_date, iso_utc,
-                                 _np_round, _py_round, ItsLiveOffsetProduction
+                                 _np_round, _py_round, indent_json, item_json, footprint_4326, ItsLiveOffsetProduction
 
 const CATALOG_DATA = joinpath(@__DIR__, "data", "catalog")
 const CATALOG_PREFIX = "s3://its-live-data/velocity_image_pair/test/v02/N00E000/"
@@ -28,21 +28,46 @@ const CATALOG_PRODUCTS = (
             cp(joinpath(CATALOG_DATA, stem * ".nc"), p)
             item, pm, sp = write_catalog_records(p, CATALOG_PREFIX * name * ".nc")
             @test basename(item) == name * ".stac.json"
-            # The reference's item, compacted as `json.dumps(…, separators = (",", ":"))` writes it, except
-            # that an optical item carries neither "sat:orbit_state": "N/A" nor the sat extension
-            # (nasa-jpl/its_live_production#49).
-            expected = read(joinpath(CATALOG_DATA, stem * ".stac.compact.json"), String)
+            # The reference's item, laid out as `json.dumps(…, indent = 2)` writes it, except that it carries
+            # no "N/A": an optical item neither "sat:orbit_state" nor the sat extension
+            # (nasa-jpl/its_live_production#49), and a Sentinel-1 item without a frame no scene frames.
+            expected = read(joinpath(CATALOG_DATA, stem * ".stac.json"), String)
             if stem in ("landsat8", "sentinel2")
-                expected = replace(expected, ",\"https://stac-extensions.github.io/sat/v1.1.0/schema.json\"" => "",
-                                   ",\"sat:orbit_state\":\"N/A\"" => "")
+                expected = replace(expected, ",\n    \"https://stac-extensions.github.io/sat/v1.1.0/schema.json\"" => "",
+                                   "\n    \"sat:orbit_state\": \"N/A\"," => "")
             end
+            expected = replace(expected, "\n    \"scene_1_frame\": \"N/A\",\n    \"scene_2_frame\": \"N/A\"," => "")
             got = read(item, String)
             @test got == expected
+            @test !occursin("N/A", got)
             @test occursin("sat:orbit_state", got) == occursin("sat/v1.1.0", got)
             @test read(pm, String) == read(joinpath(CATALOG_DATA, stem * ".nc.premet"), String)
             @test read(sp, String) == read(joinpath(CATALOG_DATA, stem * ".nc.spatial"), String)
         end
     end
+end
+
+@testset "a STAC item is laid out as json.dumps(…, indent = 2) lays it out" begin
+    for stem in keys(CATALOG_PRODUCTS)
+        compact = read(joinpath(CATALOG_DATA, string(stem) * ".stac.compact.json"), String)
+        @test indent_json(compact) == read(joinpath(CATALOG_DATA, string(stem) * ".stac.json"), String)
+    end
+    @test indent_json("{\"a\":[],\"b\":{},\"c\":\"x, {y}: \\\"z\\\"\"}") ==
+          "{\n  \"a\": [],\n  \"b\": {},\n  \"c\": \"x, {y}: \\\"z\\\"\"\n}"
+end
+
+@testset "a Sentinel-1 product's frame is its item's scene frames" begin
+    IL = ItsLiveOffsetProduction
+    s = IL.read_summary(joinpath(CATALOG_DATA, "sentinel1.nc"))
+    # The summary of the same product with its frame recorded.
+    framed = IL.ProductSummary(s.x, s.y, s.geotransform, s.epsg, s.id_img1, s.id_img2, s.acquisition_date_img1,
+                               s.acquisition_date_img2, s.date_center, s.date_dt, s.roi_valid_percentage,
+                               s.flight_direction_img1, "13201", "13201", s.date_created, s.date_updated)
+    fp = footprint_4326(framed)
+    uri = CATALOG_PREFIX * CATALOG_PRODUCTS.sentinel1 * ".nc"
+    got = item_json(framed, fp, CATALOG_PRODUCTS.sentinel1, uri)
+    @test occursin("\"scene_2_id\":\"" * s.id_img2 * "\",\"scene_1_frame\":\"13201\",\"scene_2_frame\":\"13201\"", got)
+    @test !occursin("scene_1_frame", item_json(s, fp, CATALOG_PRODUCTS.sentinel1, uri))
 end
 
 @testset "a file that is no product is refused, naming what it lacks" begin
