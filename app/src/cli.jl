@@ -321,7 +321,7 @@ end
 # module next recompiles. A bundle reads its own VERSION instead.
 const CHECKOUT_VERSION = let dir = dirname(@__DIR__)
     try
-        String(strip(read(`git -C $dir describe --dirty --tags --long --match '*[0-9]*'`, String)))
+        String(strip(read(`git -C $dir describe --dirty --tags --match '*[0-9]*'`, String)))
     catch
         ""
     end

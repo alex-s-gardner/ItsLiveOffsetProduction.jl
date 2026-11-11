@@ -54,7 +54,7 @@ jobs:
       - id: version
         # A tag release is named by its tag; any other build by its distance from the last tag.
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --dirty --tags --long --match '*[0-9]*'); fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --dirty --tags --match '*[0-9]*'); fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: julia-actions/setup-julia@v2
         with:
