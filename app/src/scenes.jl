@@ -67,9 +67,11 @@ The filter `runAutorift` applies to the cropped pair (`testautoRIFT.py:293-308,5
 the pair's scenes, most stringent first. An `L[EO]07_` scene acquired on or after 2003-05-31, after the
 Scan Line Corrector failed, makes it `WALLIS_FILL`; an `LT0[45]_` scene makes it `NO_FILTER`, the
 reference's commented-out `fft` branch, because those scenes reach the correlator carrying their native
-filter; anything else is `HIGHPASS`. The width is 5 for every optical sensor.
+filter; a Sentinel-2 pair is `WALLIS`; anything else is `HIGHPASS`. The width is 5 for every optical sensor.
+Sentinel-2 is Wallis-filtered, where the Python production high-passes it: the Wallis filter keeps more points
+at a lower stable-surface error.
 """
-@enum CorrelatorFilter HIGHPASS WALLIS_FILL NO_FILTER
+@enum CorrelatorFilter HIGHPASS WALLIS WALLIS_FILL NO_FILTER
 
 const FILTER_WIDTH = 5
 
@@ -81,6 +83,7 @@ function correlator_filter(c::Job)
     methods = (_scene_method(c.reference.name), _scene_method(c.secondary.name))
     :wallis_fill in methods && return WALLIS_FILL
     :fft in methods && return NO_FILTER
+    c.platform == "S2" && return WALLIS
     return HIGHPASS
 end
 

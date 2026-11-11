@@ -21,5 +21,6 @@ else
         include("flightdirection.jl")
         include("aster.jl")
         include("geometry.jl")
+        include("dispfilt.jl")
     end
 end

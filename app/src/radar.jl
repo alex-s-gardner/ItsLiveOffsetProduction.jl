@@ -692,7 +692,7 @@ function package(s::RadarSetup, c::Correlation, output::String, lonlat::F, tide:
     refv, ssm = ItsLiveOffsetProduction.reference_velocity(s.inputs)
     dx = tide ? tide_correct(s, x, y, lonlat, c.dx, info, tide_model) : c.dx
     input = ItsLiveOffsetProduction.ItsLiveInput(
-        :radar, DETECTION_METHOD, "radar, map", AUTORIFT_VERSION,
+        :radar, DETECTION_METHOD, "radar, map", app_version(),
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), s.pair.dt,
         georef, info, coeffs, refv, ssm, swath_bias, dx, c.dy, c.chip_size, c.scale, c.interpolated)
     return write_named_product(output, s.early.name, s.late.name, roi, input)

@@ -53,6 +53,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The tags `git describe` names the version by, which every product records.
+          fetch-depth: 0
       - uses: julia-actions/setup-julia@v2
         with:
           version: '1'
@@ -68,6 +71,9 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The tags `git describe` names the version by, which every product records.
+          fetch-depth: 0
       - uses: julia-actions/setup-julia@v2
         with:
           # The version `app/Manifest.toml` was resolved with.
