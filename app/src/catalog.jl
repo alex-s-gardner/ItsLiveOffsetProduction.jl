@@ -264,7 +264,14 @@ function indent_json(s::String)
     return String(take!(io))
 end
 
-_newline!(io::IOBuffer, depth::Int) = (write(io, UInt8('\n')); write(io, repeat(" ", 2 * depth)); nothing)
+# One byte at a time: `repeat` on a string is not compiled by `juliac --trim`.
+function _newline!(io::IOBuffer, depth::Int)
+    write(io, UInt8('\n'))
+    for _ in 1:(2 * depth)
+        write(io, UInt8(' '))
+    end
+    return nothing
+end
 
 # ---------------------------------------------------------------------------
 # NSIDC's premet and spatial files
