@@ -110,13 +110,13 @@ dy_sign(::Setup) = DY_SIGN
 """
     correlate(s, img, pre; filter_tile, cache_io, masked, scratch) -> Correlation
 
-`run_job`'s grid and correlate stages for one correlator filter `pre`: the driver's chip-size maximum and
-the parameters the geometry implies, the grid chopped to a multiple of the coarsest level and declined where
-the no-data mask is set, and a blocked `autorift` over 512² read chunks. `filter_tile` is the side of
-`AutoRIFT.FilterTileCache`'s tiles, which keeps each filtered tile across the passes in a file under
-`scratch`; that cache holds only a `Highpass` result. `masked` hands `WallisGapfill` its gaps as the pixels
-reading zero (`np.isclose(image, 0)`), which AutoRIFT reads from the validity masks rather than from the
-values.
+`run_job`'s grid and correlate stages for one correlator filter `pre`: the driver's chip-size maximum, the
+parameters the geometry implies with the platform's displacement filter ([`dispfilt`](@ref)), the grid
+chopped to a multiple of the coarsest level and declined where the no-data mask is set, and a blocked
+`autorift` over 512² read chunks. `filter_tile` is the side of `AutoRIFT.FilterTileCache`'s tiles, which keeps
+each filtered tile across the passes in a file under `scratch`; that cache holds a `Highpass` or `Wallis`
+result. `masked` hands `WallisGapfill` its gaps as the pixels reading zero (`np.isclose(image, 0)`), which
+AutoRIFT reads from the validity masks rather than from the values.
 
 An ASTER pair ([`is_aster`](@ref)) is correlated with [`UnsaturatedMask`](@ref) validity masks, which keep the
 correlator off band 3N's saturated areas, and a measurement whose correlation is below
@@ -135,7 +135,7 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     declined = img.declined
     cmax = driver_chip_size_max(g, declined)
     scale = AutoRIFT.chip_size_scale(g)
-    p = AutoRIFT.params(g; threaded = AutoRIFT.True(), preprocess = pre,
+    p = AutoRIFT.params(g; threaded = AutoRIFT.True(), preprocess = pre, outliers = dispfilt(s.job.platform),
                         chip_size_max = (X = cmax, Y = even_chip(cmax * scale)))
     factor = cmax ÷ p.chip_size_min.X
     # Lattices counted from the DispGrid origin, so every product's coarser levels sit at the same map

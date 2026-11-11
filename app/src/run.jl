@@ -188,6 +188,9 @@ function _correlate(c::Job, s, img::Imagery, output::String, options::RunOptions
         if f === HIGHPASS
             _correlate_and_package(s, img, AutoRIFT.Highpass(filter_width(c)), options.filter_tile, false,
                                    output, options, dir)
+        elseif f === WALLIS
+            _correlate_and_package(s, img, AutoRIFT.Wallis(filter_width(c), 0.0), options.filter_tile, false,
+                                   output, options, dir)
         elseif f === WALLIS_FILL
             _correlate_and_package(s, img, AutoRIFT.WallisGapfill(filter_width(c), WALLIS_STD_CUTOFF), nothing,
                                    true, output, options, dir)
