@@ -268,7 +268,7 @@ versions/<version>/
 - Versions up to `v0.1.0-29` name the bundle and its executable `autorift_itslive_production`; later ones
   `autorift_itslive`.
 - `<version>` is `git describe` of the commit the bundles were built from (for example `v0.1.0-14-g9f47bbd`:
-  14 commits after the `v0.1.0` tag, at commit `9f47bbd`). A version is written once and never overwritten;
+  14 commits after the `v0.1.0` tag, at commit `9f47bbd`); a tagged commit's is the tag alone. A version is written once and never overwritten;
   `latest.json` is the only object that changes.
 - `<platform>` is `linux-aarch64` (AWS Graviton), `linux-x86_64` (Intel and AMD) or `macos-arm64` (Apple
   silicon). `manifest.json` records where each was built and tested.
