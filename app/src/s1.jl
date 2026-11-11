@@ -610,8 +610,10 @@ end
 # Packaging
 # ---------------------------------------------------------------------------
 
-# A `UtcTime` as a `DateTime`, its fraction rounded to the millisecond.
-s1_datetime(t::SLCDatasets.UtcTime) = t.datetime + Dates.Millisecond(round(Int, t.seconds * 1000))
+# A `UtcTime` to the microsecond: annotation times are recorded to the microsecond, so rounding its residual
+# recovers the recorded digits.
+s1_datetime(t::SLCDatasets.UtcTime) =
+    ItsLiveOffsetProduction.UtcMicros(t.datetime, round(Int64, t.seconds * 1_000_000))
 
 # A product's id: its file name without `.SAFE` or `.zip`.
 function _s1_name(p::S1Product)

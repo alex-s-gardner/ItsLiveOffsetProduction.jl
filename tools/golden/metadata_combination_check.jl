@@ -50,7 +50,7 @@ using Test
     @test info.extra["path_img1"] == 9 && info.extra["row_img1"] == 11
     @test info.extra["collection_number_img1"] == 2
     @test info.extra["collection_category_img1"] == "T1"
-    @test info.acquisition_date_img1 == DateTime("2020-07-03T15:00:24.531")
+    @test DateTime(info.acquisition_date_img1) == DateTime("2020-07-03T15:00:24.531")
 end
 
 @testset "Sentinel-2 identification combines into ItsLiveOffsetProduction.ImagePairInfo" begin

@@ -28,9 +28,10 @@ const PIXEL_SIZE = 120.0     # metres, crop.py's alignment grid — applied to e
 # `crop.py`'s own constant reads `...00:00:00Z`, but its comment says to use "exactly what xarray
 # encodes" rather than the constant, and `xr.coding.times.encode_cf_datetime` normalizes the "Z" to
 # an explicit offset when it re-serializes — confirmed against a real captured product, not assumed.
-const TIME_UNITS = "seconds since 1980-01-06T00:00:00+00:00"
+# `time` is int64 microseconds, numpy's `datetime64[us]`: a float64 of seconds holds microseconds since 1980
+# only to within its 53-bit mantissa (ASFHyP3/hyp3-autorift#448).
+const TIME_UNITS = "microseconds since 1980-01-06T00:00:00+00:00"
 const CALENDAR = "proleptic_gregorian"
-const GPS_EPOCH = DateTime(1980, 1, 6)
 
 const TITLE = "autoRIFT surface velocities"
 const AUTHOR = "Alex S. Gardner, JPL/NASA; Yang Lei, GPS/Caltech"
@@ -695,23 +696,20 @@ function _satellite_attribute(info::ImagePairInfo)
     return s1 == s2 ? s1 : "$s1 and $s2"
 end
 
-# Julia's `DateTime` is millisecond-precision, three orders coarser than the reference's microsecond
-# timestamps; `date_center` loses precision this cannot recover. Unlike `time`/`date_created`, this
-# attribute is not excluded from the golden comparison — a real, usually negligible, source of
-# mismatch, not a choice made here.
-function _date_dt_center(d0::DateTime, d1::DateTime)
+# `(d1 - d0)` in days and the instant between them, both to the microsecond as Python's `timedelta` takes them.
+function _date_dt_center(d0::UtcMicros, d1::UtcMicros)
     d1 >= d0 || throw(ArgumentError("acquisition_date_img1 must not be after acquisition_date_img2"))
-    date_dt = Dates.value(d1 - d0) / 86_400_000.0
-    date_center = d0 + (d1 - d0) ÷ 2
-    return date_dt, date_center
+    return Dates.value(d1 - d0) / 86_400_000_000, midpoint(d0, d1)
 end
 
-# `Dates.format(dt, dateformat"yyyymmddTHH:MM:SS.sss")`, written field by field: `Dates.format` pads
-# with `lpad`, which measures `textwidth` and so cannot be compiled by `juliac --trim`.
-_format_date(dt::DateTime) =
-    string(Dates.year(dt); pad = 4) * string(Dates.month(dt); pad = 2) * string(Dates.day(dt); pad = 2) *
-    "T" * string(Dates.hour(dt); pad = 2) * ":" * string(Dates.minute(dt); pad = 2) * ":" *
-    string(Dates.second(dt); pad = 2) * "." * string(Dates.millisecond(dt); pad = 3)
+# `strftime('%Y%m%dT%H:%M:%S.%f')`, written field by field: `Dates.format` pads with `lpad`, which measures
+# `textwidth` and so cannot be compiled by `juliac --trim`.
+function _format_date(t::UtcMicros)
+    dt = DateTime(t)
+    return string(Dates.year(dt); pad = 4) * string(Dates.month(dt); pad = 2) * string(Dates.day(dt); pad = 2) *
+           "T" * string(Dates.hour(dt); pad = 2) * ":" * string(Dates.minute(dt); pad = 2) * ":" *
+           string(Dates.second(dt); pad = 2) * "." * string(mod(t.us, 1_000_000); pad = 6)
+end
 
 const _MONTH_ABBREVIATIONS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
                               "Dec")
@@ -728,7 +726,7 @@ _format_created(dt::DateTime) =
 # branch) — confirmed against a real captured `IMG_INFO_DICT`, not assumed. Sentinel-1's are sourced
 # from a pre-formatted metadata string instead and may not follow this rule; unconfirmed against a
 # real capture, since only an optical case has been checked so far.
-_format_date_stripped(dt::DateTime) = String(rstrip(_format_date(dt), '0'))
+_format_date_stripped(t::UtcMicros) = String(rstrip(_format_date(t), '0'))
 
 # Entry by entry rather than through `Dict(pairs...)`, whose seventeen differently typed pairs are a
 # `Vararg{Any}` call a `--trim`med program cannot make. Sized first, as that constructor sizes it, so
@@ -974,7 +972,7 @@ end
 function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool, d::_ProductData,
                        stable_source::Int, stable_shift_applied::Int, stable_count::Int, stable_count1::Int,
                        pixel_size_y::Float64, img_pair_info_dict::Dict{String,AttrValue},
-                       mapping_dict::Dict{String,AttrValue}, date_center_dt::DateTime, cropped::Bool)
+                       mapping_dict::Dict{String,AttrValue}, date_center_dt::UtcMicros, cropped::Bool)
     x, y = d.x, d.y
     vx, vy, v, V_error, nodata = d.vx, d.vy, d.v, d.V_error, d.nodata
     vx_stats, vy_stats = d.vx_stats, d.vy_stats
@@ -990,8 +988,7 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
     # cropped path's convention.
     zero = cropped ? "0" : "0.0"
     mapping_dict["GeoTransform"] = "$(_geo_num(x[1])) $(_geo_num(x_cell)) $zero $(_geo_num(y[1])) $zero $(_geo_num(y_cell))"
-    date_center_str = _format_date(date_center_dt)
-    date_center_str = String(rstrip(date_center_str, '0'))
+    date_center_str = _format_date_stripped(date_center_dt)
     img_pair_info_dict["date_center"] = date_center_str
 
     with_netcdf(String(path), cropped) do ds
@@ -1026,10 +1023,9 @@ function _write_file!(path::AbstractString, input::ItsLiveInput, is_radar::Bool,
         _defvar_coord!(ds, "y", y, "projection_y_coordinate", "y coordinate of projection"; fillvalue = coord_fill)
 
         if cropped
-            t = _defvar_scalar!(ds, "time", NaN, Dict{String,AttrValue}(), ("time",))
-            jitter_us = mod(hash(basename(path)), 1_000_000)
-            seconds = (Dates.value(date_center_dt - GPS_EPOCH) * 1000 + jitter_us) / 1.0e6
-            put_var!(t, [seconds]; start = (0,), count = (1,))
+            t = _defvar_scalar!(ds, "time", typemin(Int64), Dict{String,AttrValue}(), ("time",))
+            jitter_us = Int64(mod(hash(basename(path)), 1_000_000))
+            put_var!(t, [(date_center_dt + Dates.Microsecond(jitter_us)).us]; start = (0,), count = (1,))
             _setattr!(t, "standard_name", "time")
             _setattr!(t, "description", "mid-date between acquisition_date_img1 and acquisition_date_img2 " *
                                        "with microseconds added to ensure uniqueness.")

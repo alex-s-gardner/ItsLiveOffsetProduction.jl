@@ -41,7 +41,7 @@ function s2_flight_direction(datastrip_head::String, sensing_time::DateTime)
         t = match(r"<GPS_TIME>([^<]+)</GPS_TIME>", p)
         v = match(r"<VELOCITY_VALUES[^>]*>([^<]+)</VELOCITY_VALUES>", p)
         (t === nothing || v === nothing) && continue
-        d = abs(Dates.value(parse_utc(String(t.captures[1])) - sensing_time))
+        d = abs(Dates.value(DateTime(parse_utc(String(t.captures[1]))) - sensing_time))
         d < dt || continue
         vel = _numbers(String(v.captures[1]))
         length(vel) == 3 || continue
@@ -56,7 +56,7 @@ end
 function _s2_sensing_time(tile_xml::String)
     m = match(r"<SENSING_TIME[^>]*>([^<]+)</SENSING_TIME>", tile_xml)
     m === nothing && throw(ArgumentError("the tile metadata has no SENSING_TIME"))
-    return parse_utc(String(m.captures[1]))
+    return DateTime(parse_utc(String(m.captures[1])))
 end
 
 """

@@ -5,7 +5,8 @@
 # `s3://its-live-data/velocity_image_pair/test/v02/N00E000/`. The files are named for their sensor: a
 # product name runs to 196 characters, past what a Windows checkout can write.
 
-using AutoriftItsLiveProduction: write_catalog_records, parse_pair_date, parse_created_date, iso_utc,
+using Dates: DateTime
+using AutoriftItsLiveProduction: write_catalog_records, parse_utc, s1_datetime, SLCDatasets, parse_pair_date, parse_created_date, iso_utc,
                                  _np_round, _py_round, indent_json, item_json, footprint_4326, ItsLiveOffsetProduction
 
 const CATALOG_DATA = joinpath(@__DIR__, "data", "catalog")
@@ -82,6 +83,19 @@ end
         end
         @test_throws "has no mapping:GeoTransform" IL.read_summary(p)
     end
+end
+
+@testset "acquisition times are read to the microsecond" begin
+    U = ItsLiveOffsetProduction.UtcMicros
+    f = ItsLiveOffsetProduction._format_date_stripped
+    # Landsat's SCENE_CENTER_TIME carries seven digits and NISAR's nine; both are truncated to the sixth.
+    @test f(parse_utc("2020-07-03T15:00:24.5318140Z")) == "20200703T15:00:24.531814"
+    @test f(parse_utc("2020-08-20T15:00:40.2876700Z")) == "20200820T15:00:40.28767"
+    @test f(parse_utc("2025-10-28T23:52:01.123456789")) == "20251028T23:52:01.123456"
+    @test parse_utc("2020-06-26T20:40:21Z") == U(DateTime(2020, 6, 26, 20, 40, 21))
+    @test_throws "not a UTC timestamp" parse_utc("2020-07-03T15:00:24.5x")
+    # A Sentinel-1 annotation time: a whole second and a residual.
+    @test f(s1_datetime(SLCDatasets.UtcTime(DateTime(2018, 8, 9, 20, 46, 30), 0.822709))) == "20180809T20:46:30.822709"
 end
 
 @testset "dates and numbers are printed as the reference prints them" begin

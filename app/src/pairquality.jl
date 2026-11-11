@@ -117,18 +117,15 @@ function warn_quality(early::String, late::String, q::PairQuality)
 end
 
 """
-    check_resolved(c::Correlation, early, late, q; radar)
+    check_resolved(c::Correlation, early, late, q)
 
-Throw, naming the pair and its diagnostics, when no point of the correlation resolved: [`NoProduct`](@ref),
-except for a `radar` pair whose images [`quality_warnings`](@ref) finds nothing wrong with. There an empty
-result points at the pair's geometry or resampling, not the scenes, so it is an error and writes nothing.
+Throw [`NoProduct`](@ref), naming the pair and its diagnostics, when no point of the correlation resolved,
+with what [`quality_warnings`](@ref) finds wrong with the images. Images it finds nothing wrong with belong to
+a pair too decorrelated to measure: no point that correlated also passed the displacement filter.
 """
-function check_resolved(c::Correlation, early::String, late::String, q::PairQuality; radar::Bool)
+function check_resolved(c::Correlation, early::String, late::String, q::PairQuality)
     resolved(c) && return nothing
     w = quality_warnings(q)
-    report = quality_report(early, late, q)
-    radar && isempty(w) && throw(ErrorException(
-        "no point of the radar pair resolved, though neither image is empty or flat, so no product is written. " *
-        report))
-    throw(NoProduct("no point of the pair resolved" * (isempty(w) ? "" : "; " * join(w, "; ")) * ". " * report))
+    why = isempty(w) ? "; no point both correlated and passed the displacement filter" : "; " * join(w, "; ")
+    throw(NoProduct("no point of the pair resolved" * why * ". " * quality_report(early, late, q)))
 end
