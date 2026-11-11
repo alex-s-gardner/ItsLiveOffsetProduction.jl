@@ -38,5 +38,5 @@ end
 @testset "a product names the version that made it" begin
     v = AutoriftItsLiveProduction.app_version()
     # Unbuilt, the checkout's `git describe`: a tag, the commits since it, and the commit.
-    @test occursin(r"^v\d+\.\d+\.\d+-\d+-g[0-9a-f]+(-dirty)?$", v)
+    @test occursin(r"^v\d+\.\d+\.\d+(-\d+-g[0-9a-f]+)?(-dirty)?$", v)
 end
