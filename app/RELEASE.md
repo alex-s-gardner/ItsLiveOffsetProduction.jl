@@ -298,6 +298,7 @@ autorift_itslive-<version>-<platform>/
     lib/                                the runtime and its libraries (GDAL, PROJ, HDF5, NetCDF, FFTW, ...)
     share/                              data the libraries read (GDAL and PROJ data, the CA bundle, ...)
     share/autorift_itslive/fftw-wisdom/    FFTW wisdom, one file per CPU model (above)
+    share/autorift_itslive/VERSION         the version every product records (autoRIFT_software_version)
     README.md                           this file
 ```
 

@@ -3,6 +3,7 @@
 using AutoriftItsLiveProduction: dispfilt, DISPFILT_STRICT, DISPFILT_OPTICAL, correlator_filter, Job,
                                  SceneSource, WALLIS, HIGHPASS, WALLIS_FILL, NO_FILTER
 using AutoriftItsLiveProduction.AutoRIFT: GardnerFilter
+import AutoriftItsLiveProduction
 
 job(platform, ref, sec) = Job(platform, platform, SceneSource(ref, ref, "", "", ""),
                               SceneSource(sec, sec, "", "", ""), ref * "_X_" * sec)
@@ -32,4 +33,10 @@ end
     @test correlator_filter(job("L8", l8, l8)) === HIGHPASS
     @test correlator_filter(job("L7", l8, "LE07_L1TP_061018_20120428_20200909_02_T1")) === WALLIS_FILL
     @test correlator_filter(job("L5", "LT05_L1TP_060018_19851028_20200918_02_T1", l8)) === NO_FILTER
+end
+
+@testset "a product names the version that made it" begin
+    v = AutoriftItsLiveProduction.app_version()
+    # Unbuilt, the checkout's `git describe`: a tag, the commits since it, and the commit.
+    @test occursin(r"^v\d+\.\d+\.\d+-\d+-g[0-9a-f]+(-dirty)?$", v)
 end

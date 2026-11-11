@@ -40,6 +40,13 @@ find "$out/share/julia/artifacts" -mindepth 2 -maxdepth 2 -type d \( -name inclu
     -exec rm -rf {} +
 find "$out/share/julia/artifacts" -type f -name '*.a' -delete
 "$here/link_libraries.sh" "$out"
+# The version each product records (`app_version` in src/cli.jl): the `git describe` the release workflow names
+# its bundles by, or AUTORIFT_ITSLIVE_VERSION when the build is not in a git checkout.
+mkdir -p "$out/share/autorift_itslive"
+version="${AUTORIFT_ITSLIVE_VERSION:-$(git -C "$here" describe --dirty --tags --long --match '*[0-9]*' 2>/dev/null || true)}"
+[ -n "$version" ] || { echo "cannot name the build's version: not a git checkout and AUTORIFT_ITSLIVE_VERSION unset" >&2; exit 1; }
+printf '%s\n' "$version" > "$out/share/autorift_itslive/VERSION"
+echo "version $version"
 # The FFTW wisdom each run starts from (`ensure_environment` in src/cli.jl), one file per CPU model.
 mkdir -p "$out/share/autorift_itslive/fftw-wisdom"
 cp "$here"/wisdom/*.wisdom "$out/share/autorift_itslive/fftw-wisdom/"

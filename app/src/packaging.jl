@@ -1,10 +1,5 @@
 # The `ItsLiveInput` metadata the product needs, and the product itself.
 
-# The reference implementation being reproduced. Every golden product's `source` attribute names these two
-# versions, and the container they come from is `ghcr.io/asfhyp3/hyp3-autorift:0.28.4`.
-const PLUGIN_NAME = "hyp3_autorift"
-const PLUGIN_VERSION = "0.28.4"
-const AUTORIFT_VERSION = "2.1.1"
 
 # `testautoRIFT.py:1363-1365`, for an optical pair.
 const DETECTION_METHOD = "feature"
@@ -85,8 +80,7 @@ attributed acquisition year is `acquisition_date_img1`'s.
 """
 function product_source(info::ItsLiveOffsetProduction.ImagePairInfo)
     s = "NASA MEaSUREs ITS_LIVE project. Processed by ASF DAAC HyP3 " * string(Dates.year(Dates.now())) *
-        " using the " * PLUGIN_NAME * " plugin version " * PLUGIN_VERSION * " running autoRIFT version " *
-        AUTORIFT_VERSION
+        " using autorift_itslive version " * app_version()
     startswith(info.mission_img1, "L") &&
         return s * ". Landsat-" * string(info.satellite_img1) * " images courtesy of the U.S. Geological Survey"
     info.mission_img1 == "S" && return s * ". Contains modified Copernicus Sentinel data " *
@@ -163,7 +157,7 @@ function package(s::Setup, c::Correlation, output::String, lonlat::F, tide::Bool
         info.extra["geometric_correction_flag"] = Int64(1)
     end
     input = ItsLiveOffsetProduction.ItsLiveInput(
-        :optical, DETECTION_METHOD, MOTION_COORDINATES, AUTORIFT_VERSION,
+        :optical, DETECTION_METHOD, MOTION_COORDINATES, app_version(),
         replace(PARAMETER_SHAPEFILE, "/vsicurl/" => ""), product_source(info), nothing,
         georef, info, coeffs, refv, ssm, nothing, dx, dy, c.chip_size, c.scale, c.interpolated)
     return write_named_product(output, s.early.name, s.late.name, roi, input)

@@ -300,6 +300,33 @@ end
 # Set to the per-run wisdom directory `ensure_environment` made, which the run deletes when it ends.
 const TEMP_WISDOM_VAR = "AUTORIFT_ITSLIVE_TEMP_WISDOM"
 
+"""
+    app_version() -> String
+
+The version of `autorift_itslive` this is, as `app/build.sh` wrote it into the bundle
+(`share/autorift_itslive/VERSION`, the `git describe` of the commit it was built from), or, run unbuilt, the
+`git describe` of the checkout this module was compiled from. Every product records it
+(`autoRIFT_software_version`), so a product names the code and the filter coefficients that made it.
+"""
+function app_version()
+    f = joinpath(dirname(dirname(_exepath())), "share", "autorift_itslive", "VERSION")
+    isfile(f) && return String(strip(read(f, String)))
+    isempty(CHECKOUT_VERSION) && throw(ErrorException(
+        "cannot name this build's version: no " * f * " and the module was not compiled from a git checkout"))
+    return CHECKOUT_VERSION
+end
+
+# The `git describe` of the checkout this module is compiled from, or "" outside one. Read once, when the
+# module is compiled, since a trimmed executable cannot run a subprocess; it can lag the checkout until the
+# module next recompiles. A bundle reads its own VERSION instead.
+const CHECKOUT_VERSION = let dir = dirname(@__DIR__)
+    try
+        String(strip(read(`git -C $dir describe --dirty --tags --long --match '*[0-9]*'`, String)))
+    catch
+        ""
+    end
+end
+
 # The FFTW wisdom the bundle ships: `share/autorift_itslive/fftw-wisdom` beside `bin/`, one file
 # per CPU model, named as `AutoRIFT.fftw_wisdom_path` names it.
 bundled_wisdom_dir(exe::String) = joinpath(dirname(dirname(exe)), "share", "autorift_itslive", "fftw-wisdom")
