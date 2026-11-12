@@ -37,9 +37,10 @@ ZarrZlib = {rev = "complex-int-dtype-v0.11", subdir = "ZarrZlib", url = "https:/
 
 [compat]
 GDAL = "1.13.0"
+ImagePairGeometry = "0.1.2"
 NanoDates = "2"
 OpticalDatasets = "0.3"
-SLCDatasets = "0.2"
+SLCDatasets = "0.3"
 StructTypes = "1.11.0"
 julia = "1.11"
 

@@ -231,9 +231,6 @@ function s1_swath_bias(c::GoldenCase, s::Setup, p)
                                                    bd.same_platform, bd.reference_platform)
 end
 
-# A `UtcTime`'s instant to the microsecond `ImagePairInfo.acquisition_date_img1` carries.
-_s1_datetime(t) = NanoDate(t.datetime) + Dates.Microsecond(round(Int64, t.seconds * 1_000_000))
-
 # Splits a Sentinel-1 product id (or `burst2safe`'s synthesized SAFE name, same layout —
 # `S1A_IW_SLC__1SSH_<start>_<stop>_<orbit>_<datatake>_<productid>`, ten fields because `SLC__1SSH`
 # contributes an empty one) into the fields `img_pair_info`'s `extra` carries verbatim. Measured
@@ -291,18 +288,9 @@ function s1_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
         "absolute_orbit_number_img1" => f1.orbit, "absolute_orbit_number_img2" => f2.orbit,
         "mission_data_take_ID_img1" => f1.datatake, "mission_data_take_ID_img2" => f2.datatake,
         "product_unique_ID_img1" => f1.product_id, "product_unique_ID_img2" => f2.product_id)
-    return ItsLiveOffsetProduction.ImagePairInfo(_s1_datetime(t_early), _s1_datetime(t_late), "S", "S",
+    return ItsLiveOffsetProduction.ImagePairInfo(t_early, t_late, "S", "S",
                                   f1.satellite, f2.satellite, Float64(roi_valid),
                                   round(lat; digits = 2), round(lon; digits = 2), extra)
-end
-
-# A NISAR `zeroDopplerStartTime`/`zeroDopplerEndTime`-style HDF5 string
-# ("2025-10-28T23:52:01.000000000", nanosecond precision), truncated to the microsecond as the app's
-# `parse_utc` truncates it.
-function _nisar_datetime(s::AbstractString)
-    whole, frac = split(s, '.'; limit = 2)
-    dt = Dates.DateTime(whole, Dates.dateformat"yyyy-mm-ddTHH:MM:SS")
-    return NanoDate(dt) + Dates.Microsecond(parse(Int, rpad(first(frac, 6), 6, '0')))
 end
 
 # `IMG_INFO_DICT` common to both NISAR schemas, from the two products' `Identification`.
@@ -318,7 +306,7 @@ function _nisar_img_pair_info(early::AbstractString, late::AbstractString, id1, 
         "flight_direction_img2" => lowercase(id2.pass_direction),
         "absolute_orbit_number_img1" => id1.absolute_orbit,
         "absolute_orbit_number_img2" => id2.absolute_orbit)
-    return ItsLiveOffsetProduction.ImagePairInfo(_nisar_datetime(id1.start_time), _nisar_datetime(id2.start_time),
+    return ItsLiveOffsetProduction.ImagePairInfo(id1.start_time, id2.start_time,
                                   "N", "N", 1, 1, Float64(roi_valid),
                                   round(lat; digits = 2), round(lon; digits = 2), extra)
 end

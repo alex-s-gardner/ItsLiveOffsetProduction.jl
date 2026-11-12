@@ -352,6 +352,9 @@ end
     @test ItsLiveOffsetProduction.midpoint(z, z + Dates.Microsecond(3)) == z + Dates.Microsecond(2)
     @test ItsLiveOffsetProduction.midpoint(z, z + Dates.Microsecond(5)) == z + Dates.Microsecond(2)
     @test_throws MethodError ImagePairInfo(Dates.Date(2020), t2, "L", "L", "8", "8", 80.0, 65.0, -45.0, Dict{String,Any}())
+    # A time recorded finer than the products' microsecond is truncated to it.
+    @test ImagePairInfo(t1 + Dates.Nanosecond(999), t2, "L", "L", "8", "8", 80.0, 65.0, -45.0,
+                        Dict{String,Any}()).acquisition_date_img1 == t1
 
     n = 10
     xs = collect(range(-3_440_587.5; step = 120.0, length = n))

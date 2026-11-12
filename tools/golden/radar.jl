@@ -142,7 +142,7 @@ end
 merged_swath(src::SafeSwaths, swath::Integer) = merge_bursts(collect(bursts(src.product, swath)))
 
 """
-    s1_mosaic(src, swaths = S1_SWATHS) -> (RadarCoordinate, UtcTime)
+    s1_mosaic(src, swaths = S1_SWATHS) -> (RadarCoordinate, NanoDate)
 
 The merged radar grid geogrid is handed for the acquisition `src` reaches.
 

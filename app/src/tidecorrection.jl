@@ -726,7 +726,7 @@ end
 
 # The midpoint of a NISAR scene's zero-Doppler start and end.
 _mid_time(id::SLCDatasets.Identification) =
-    ItsLiveOffsetProduction.midpoint(parse_utc(id.start_time), parse_utc(id.stop_time)).datetime
+    ItsLiveOffsetProduction.midpoint(id.start_time, id.stop_time).datetime
 
 """
     map_offset_pixels(ex, ny, spacing) -> (px, py)
