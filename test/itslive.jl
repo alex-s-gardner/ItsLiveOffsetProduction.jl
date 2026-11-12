@@ -7,6 +7,7 @@ using ItsLiveOffsetProduction
 using NCDatasets
 using Statistics
 using Dates
+using NanoDates: NanoDate
 using Random
 using Rasters
 using ArchGDAL
@@ -339,7 +340,7 @@ end
 end
 
 @testset "acquisition dates and time are written to the microsecond" begin
-    U = ItsLiveOffsetProduction.UtcMicros
+    U(t, us = 0) = NanoDate(t) + Dates.Microsecond(us)
     # The reference's own values for a captured Landsat 8 pair (golden LC08_L1TP_009011, P078).
     t1 = U(DateTime(2020, 7, 3, 15, 0, 24), 531_814)
     t2 = U(DateTime(2020, 8, 20, 15, 0, 40), 287_670)
@@ -348,9 +349,10 @@ end
     @test ItsLiveOffsetProduction._format_date_stripped(center) == "20200727T15:00:32.409742"
     @test ItsLiveOffsetProduction._format_date_stripped(t2) == "20200820T15:00:40.28767"
     # Python's `timedelta / 2` rounds half to even.
-    @test ItsLiveOffsetProduction.midpoint(U(0), U(3)) == U(2)
-    @test ItsLiveOffsetProduction.midpoint(U(0), U(5)) == U(2)
-    @test DateTime(t1) == DateTime(2020, 7, 3, 15, 0, 24, 531)
+    z = NanoDate(DateTime(2020, 1, 1))
+    @test ItsLiveOffsetProduction.midpoint(z, z + Dates.Microsecond(3)) == z + Dates.Microsecond(2)
+    @test ItsLiveOffsetProduction.midpoint(z, z + Dates.Microsecond(5)) == z + Dates.Microsecond(2)
+    @test_throws MethodError ImagePairInfo(Dates.Date(2020), t2, "L", "L", "8", "8", 80.0, 65.0, -45.0, Dict{String,Any}())
 
     n = 10
     xs = collect(range(-3_440_587.5; step = 120.0, length = n))
@@ -373,7 +375,8 @@ end
             tv = ds["time"]
             @test tv.attrib["units"] == "microseconds since 1980-01-06T00:00:00+00:00"
             @test eltype(tv.var) == Int64
-            @test tv.var[1] - tv.attrib["microseconds_added"] == center.us
+            @test tv.var[1] - tv.attrib["microseconds_added"] ==
+                  Dates.value(DateTime(2020, 7, 27, 15, 0, 32) - DateTime(1980, 1, 6)) * 1000 + 409_742
         end
     finally
         rm(path; force = true)

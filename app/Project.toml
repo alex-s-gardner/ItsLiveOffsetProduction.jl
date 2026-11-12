@@ -14,6 +14,7 @@ ImagePairGeometry = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
 ItsLiveOffsetProduction = "74356795-1a89-4ad9-90d1-877978e2d409"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
+NanoDates = "46f1a544-deae-4307-8689-c12aa3c955c6"
 NetworkOptions = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 OpticalDatasets = "a0fc030c-aaa4-4e24-9fdc-1cbe49ce0bda"
 SLCDatasets = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
@@ -36,6 +37,8 @@ ZarrZlib = {rev = "complex-int-dtype-v0.11", subdir = "ZarrZlib", url = "https:/
 
 [compat]
 GDAL = "1.13.0"
+NanoDates = "2"
+OpticalDatasets = "0.3"
 SLCDatasets = "0.2"
 StructTypes = "1.11.0"
 julia = "1.11"

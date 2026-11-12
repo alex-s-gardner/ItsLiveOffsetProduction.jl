@@ -613,7 +613,7 @@ end
 # A `UtcTime` to the microsecond: annotation times are recorded to the microsecond, so rounding its residual
 # recovers the recorded digits.
 s1_datetime(t::SLCDatasets.UtcTime) =
-    ItsLiveOffsetProduction.UtcMicros(t.datetime, round(Int64, t.seconds * 1_000_000))
+    NanoDate(t.datetime) + Dates.Microsecond(round(Int64, t.seconds * 1_000_000))
 
 # A product's id: its file name without `.SAFE` or `.zip`.
 function _s1_name(p::S1Product)

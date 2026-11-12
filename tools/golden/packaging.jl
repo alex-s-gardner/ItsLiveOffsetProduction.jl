@@ -10,6 +10,7 @@ import GeoFormatTypes as GFT
 import FastGeoProjections as FGP
 using ItsLiveOffsetProduction
 using OpticalDatasets
+using NanoDates: NanoDate
 
 # The reference implementation being reproduced. Every golden product's `source` attribute names these
 # two versions, and the container they come from is `ghcr.io/asfhyp3/hyp3-autorift:0.28.4`; neither is a
@@ -231,7 +232,7 @@ function s1_swath_bias(c::GoldenCase, s::Setup, p)
 end
 
 # A `UtcTime`'s instant to the microsecond `ImagePairInfo.acquisition_date_img1` carries.
-_s1_datetime(t) = ItsLiveOffsetProduction.UtcMicros(t.datetime, round(Int64, t.seconds * 1_000_000))
+_s1_datetime(t) = NanoDate(t.datetime) + Dates.Microsecond(round(Int64, t.seconds * 1_000_000))
 
 # Splits a Sentinel-1 product id (or `burst2safe`'s synthesized SAFE name, same layout —
 # `S1A_IW_SLC__1SSH_<start>_<stop>_<orbit>_<datatake>_<productid>`, ten fields because `SLC__1SSH`
@@ -301,7 +302,7 @@ end
 function _nisar_datetime(s::AbstractString)
     whole, frac = split(s, '.'; limit = 2)
     dt = Dates.DateTime(whole, Dates.dateformat"yyyy-mm-ddTHH:MM:SS")
-    return ItsLiveOffsetProduction.UtcMicros(dt, parse(Int, rpad(first(frac, 6), 6, '0')))
+    return NanoDate(dt) + Dates.Microsecond(parse(Int, rpad(first(frac, 6), 6, '0')))
 end
 
 # `IMG_INFO_DICT` common to both NISAR schemas, from the two products' `Identification`.

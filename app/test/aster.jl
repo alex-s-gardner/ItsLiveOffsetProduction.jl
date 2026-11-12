@@ -38,7 +38,7 @@ const AST_CMR = """
     @test opendata_platform("AST") == "aster"
     id = aster_identification(AST_UR)
     @test (id.mission, id.satellite, id.sensor, id.correction_level) == ("T", "1", "AST", "L1T")
-    @test id.acquisition_time == DateTime(2024, 7, 22, 14, 26, 36)
+    @test id.acquisition_time.datetime == DateTime(2024, 7, 22, 14, 26, 36)
 end
 
 @testset "saturated samples and their neighbours are invalid to the correlator" begin

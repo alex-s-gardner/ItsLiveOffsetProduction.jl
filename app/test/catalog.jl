@@ -5,7 +5,8 @@
 # `s3://its-live-data/velocity_image_pair/test/v02/N00E000/`. The files are named for their sensor: a
 # product name runs to 196 characters, past what a Windows checkout can write.
 
-using Dates: DateTime
+using Dates: Dates, DateTime
+using NanoDates: NanoDate
 using AutoriftItsLiveProduction: write_catalog_records, parse_utc, s1_datetime, SLCDatasets, parse_pair_date, parse_created_date, iso_utc,
                                  _np_round, _py_round, indent_json, item_json, footprint_4326, ItsLiveOffsetProduction
 
@@ -86,7 +87,7 @@ end
 end
 
 @testset "acquisition times are read to the microsecond" begin
-    U = ItsLiveOffsetProduction.UtcMicros
+    U(t, us = 0) = NanoDate(t) + Dates.Microsecond(us)
     f = ItsLiveOffsetProduction._format_date_stripped
     # Landsat's SCENE_CENTER_TIME carries seven digits and NISAR's nine; both are truncated to the sixth.
     @test f(parse_utc("2020-07-03T15:00:24.5318140Z")) == "20200703T15:00:24.531814"

@@ -6,21 +6,19 @@ const DETECTION_METHOD = "feature"
 const MOTION_COORDINATES = "map"
 
 """
-    scene_identification(scene) -> (OpticalDatasets.Identification, ItsLiveOffsetProduction.UtcMicros)
+    scene_identification(scene) -> OpticalDatasets.Identification
 
-The scene's identity and its acquisition instant to the microsecond. A Sentinel-2 product name, like an
-ASTER granule name, carries its acquisition time to the second; a Landsat product id does not carry the
-time of day, which the reference takes from the scene's STAC item (`process.py:63-74`) and which the
-scene's `_MTL.json` gives as the same instant at the same microsecond precision. The identification's
-`acquisition_time` is that instant to the millisecond.
+The scene's identity. A Sentinel-2 product name, like an ASTER granule name, carries its acquisition time
+to the second; a Landsat product id does not carry the time of day, which the reference takes from the
+scene's STAC item (`process.py:63-74`) and which the scene's `_MTL.json` gives as the same instant to the
+same microsecond.
 """
 function scene_identification(scene::SceneSource)
-    id = startswith(scene.name, "S2") ? OpticalDatasets.sentinel2_identification(scene.name) :
-         is_aster_id(scene.name) ? aster_identification(scene.name) : nothing
-    id === nothing || return id, ItsLiveOffsetProduction.UtcMicros(id.acquisition_time)
+    startswith(scene.name, "S2") && return OpticalDatasets.sentinel2_identification(scene.name)
+    is_aster_id(scene.name) && return aster_identification(scene.name)
     name, t = landsat_acquisition(scene.mtl)
     name == scene.name || throw(ArgumentError(scene.mtl * " describes " * name * ", not " * scene.name))
-    return OpticalDatasets.landsat_identification(name, DateTime(t)), t
+    return OpticalDatasets.landsat_identification(name, t)
 end
 
 """
@@ -39,7 +37,7 @@ function native_img_pair_info(s::Setup, roi_valid::Float64)
         return nisar_img_pair_info(s.early.name, s.late.name, eg.product.identification, lg.product.identification,
                                    roi_valid, lon, lat)
     end
-    (id1, t1), (id2, t2) = scene_identification(s.early), scene_identification(s.late)
+    id1, id2 = scene_identification(s.early), scene_identification(s.late)
     # Sized for its six entries, so the attributes iterate in the order a six-pair `Dict` constructor gives.
     extra = sizehint!(Dict{String,AttrValue}(), 6)
     a = Threads.@spawn flight_direction(s.early)
@@ -54,7 +52,7 @@ function native_img_pair_info(s::Setup, roi_valid::Float64)
     _landsat_extra!(extra, 2, id2)
     extra["flight_direction_img1"] = _await(a)::String
     extra["flight_direction_img2"] = _await(b)::String
-    return ItsLiveOffsetProduction.ImagePairInfo(t1, t2, id1.mission, id2.mission, id1.satellite, id2.satellite,
+    return ItsLiveOffsetProduction.ImagePairInfo(id1.acquisition_time, id2.acquisition_time, id1.mission, id2.mission, id1.satellite, id2.satellite,
                                                  roi_valid, round(lat; digits = 2), round(lon; digits = 2), extra)
 end
 
