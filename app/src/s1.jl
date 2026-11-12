@@ -108,7 +108,7 @@ reaching the latest burst's last line and the farthest subswath's last sample, a
 line interval and the nearest's sample spacing.
 """
 struct MosaicBox
-    sensing_start::SLCDatasets.UtcTime
+    sensing_start::NanoDate
     starting_range::Float64
     dt::Float64
     dr::Float64
@@ -131,7 +131,7 @@ function MosaicBox(p::S1Product, swaths)
 end
 
 """
-    s1_mosaic(p, swaths) -> (RadarCoordinate, UtcTime)
+    s1_mosaic(p, swaths) -> (RadarCoordinate, NanoDate)
 
 The merged radar grid geogrid is handed for product `p`: the [`MosaicBox`](@ref) with the PRF, wavelength
 and orbit of the near subswath. Returns the absolute sensing start beside it, which the pair's interval is
@@ -610,11 +610,6 @@ end
 # Packaging
 # ---------------------------------------------------------------------------
 
-# A `UtcTime` to the microsecond: annotation times are recorded to the microsecond, so rounding its residual
-# recovers the recorded digits.
-s1_datetime(t::SLCDatasets.UtcTime) =
-    NanoDate(t.datetime) + Dates.Microsecond(round(Int64, t.seconds * 1_000_000))
-
 # A product's id: its file name without `.SAFE` or `.zip`.
 function _s1_name(p::S1Product)
     n = basename(rstrip(p.path, '/'))
@@ -659,7 +654,7 @@ function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::
     extra["orbit_type_img1"] = s1_orbit_kind(rp.orbit_path)
     extra["orbit_type_img2"] = s1_orbit_kind(sp.orbit_path)
     isempty(s.job.frame_id) || (extra["frame_img1"] = extra["frame_img2"] = s.job.frame_id)
-    return ItsLiveOffsetProduction.ImagePairInfo(s1_datetime(t1), s1_datetime(t2), "S", "S",
+    return ItsLiveOffsetProduction.ImagePairInfo(t1, t2, "S", "S",
                                                  String(f1[1][2:end]), String(f2[1][2:end]), roi_valid,
                                                  round(lat; digits = 2), round(lon; digits = 2), extra)
 end

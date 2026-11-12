@@ -178,7 +178,7 @@ function nisar_img_pair_info(early::String, late::String, id1::SLCDatasets.Ident
     extra["flight_direction_img2"] = lowercase(id2.pass_direction)
     extra["absolute_orbit_number_img1"] = Int64(id1.absolute_orbit)
     extra["absolute_orbit_number_img2"] = Int64(id2.absolute_orbit)
-    return ItsLiveOffsetProduction.ImagePairInfo(parse_utc(id1.start_time), parse_utc(id2.start_time),
+    return ItsLiveOffsetProduction.ImagePairInfo(id1.start_time, id2.start_time,
                                                  "N", "N", Int64(1), Int64(1), roi_valid,
                                                  round(lat; digits = 2), round(lon; digits = 2), extra)
 end

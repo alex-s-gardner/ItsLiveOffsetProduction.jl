@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "fd6baeb584b18f8143a1234561bbe2df84508796"
+project_hash = "5b5944f5618bd4c57ab7678ce227425a0b9ed56b"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -496,11 +496,11 @@ version = "0.1.1"
 
 [[deps.ImagePairGeometry]]
 deps = ["Extents", "FastGeoProjections", "GeoFormatTypes", "GeoInterface", "StaticArrays"]
-git-tree-sha1 = "a8610d6e02af275aa0fd6f98eeaa3208b977b109"
+git-tree-sha1 = "b3fbd139bebb97df8874666a155a58c5523c3c7c"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/ImagePairGeometry.jl"
 uuid = "7d3defa8-4bb6-45cf-b5d0-7628f127c0fd"
-version = "0.1.1"
+version = "0.1.2"
 
     [deps.ImagePairGeometry.extensions]
     ImagePairGeometryRastersExt = ["Rasters", "DimensionalData", "ArchGDAL", "DiskArrays", "NetworkOptions"]
@@ -928,12 +928,12 @@ uuid = "94e857df-77ce-4151-89e5-788b33177be4"
 version = "0.1.0"
 
 [[deps.SLCDatasets]]
-deps = ["ChunkManifests", "Dates", "DiskArrays", "EzXML", "StaticArrays", "Zarr", "ZarrCore", "ZarrZlib"]
-git-tree-sha1 = "5aee8df9f642b8b466d84dda014eda91ccbd79d8"
+deps = ["ChunkManifests", "Dates", "DiskArrays", "EzXML", "NanoDates", "StaticArrays", "Zarr", "ZarrCore", "ZarrZlib"]
+git-tree-sha1 = "5487d1224bdb6ab673a389230d41877e6efd9d5a"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/SLCDatasets.jl"
 uuid = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
-version = "0.2.0"
+version = "0.3.0"
 
 [[deps.SLEEFPirates]]
 deps = ["IfElse", "Static", "VectorizationBase"]

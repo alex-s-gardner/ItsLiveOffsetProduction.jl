@@ -1,6 +1,10 @@
 using Dates: Dates, DateTime
 using NanoDates: NanoDate
 
+# An acquisition time to the microsecond the products record, finer digits truncated.
+_microsecond(t::NanoDate) = trunc(t, Dates.Microsecond)
+_microsecond(t::DateTime) = NanoDate(t)
+
 # Whole microseconds from `a` to `b`: every instant here is a whole microsecond.
 _micros_between(a::NanoDate, b::NanoDate) = fld(Dates.value(b - a), 1000)
 
@@ -158,7 +162,7 @@ attribute (`id_img1`, `sensor_img1`, orbit numbers, path/row, and so on) through
 given as any dictionary whose values [`attrvalue`](@ref) accepts. Sourcing those from raw sensor
 metadata (SAFE XML, MTL, HDF5, STAC) is outside this package.
 
-The acquisition dates are `NanoDates.NanoDate`s, for the microsecond precision the reference records; a
+The acquisition dates are `NanoDates.NanoDate`s, truncated to the microsecond the reference records; a
 `DateTime` is taken as its whole millisecond.
 """
 struct ImagePairInfo
@@ -177,7 +181,7 @@ struct ImagePairInfo
                            acquisition_date_img2::Union{NanoDate,DateTime}, mission_img1, mission_img2,
                            satellite_img1, satellite_img2, roi_valid_percentage, latitude, longitude,
                            extra::AbstractDict)
-        return new(NanoDate(acquisition_date_img1), NanoDate(acquisition_date_img2), mission_img1, mission_img2,
+        return new(_microsecond(acquisition_date_img1), _microsecond(acquisition_date_img2), mission_img1, mission_img2,
                    _satellite(satellite_img1), _satellite(satellite_img2), roi_valid_percentage,
                    latitude, longitude, attrdict(extra))
     end
