@@ -22,5 +22,6 @@ else
         include("aster.jl")
         include("geometry.jl")
         include("dispfilt.jl")
+        include("burstmatching.jl")
     end
 end

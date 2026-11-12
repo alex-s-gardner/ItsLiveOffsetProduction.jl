@@ -27,11 +27,6 @@ is_zip_list(input::String) = all(u -> endswith(strip(u), ".zip"), split(input, '
 # The fraction of a burst's footprint the polygon must cover for the burst to be kept.
 const S1_SUBSET_COVER = 0.5
 
-# Bursts of one track and subswath on two passes start within this much of the same time after the
-# ascending node. A burst lasts about 2.76 s, and the ESA burst ID grid is that wide; the orbit is
-# controlled to a fraction of a second.
-const S1_ANX_MATCH = 1.0
-
 """
     SubsetBurst
 
