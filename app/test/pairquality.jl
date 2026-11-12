@@ -65,19 +65,14 @@ end
     chip[1, 1] = 32                      # one resolved point is a result
     some = Correlation(fill(NaN32, 4, 4), fill(NaN32, 4, 4), chip, falses(4, 4), ones(Int32, 4, 4), 1.0, 1.0)
     q = PairQuality(ImageSample(0.00306, 1.0, false), ImageSample(0.166, 1.0, false), 34.7)
-    @test check_resolved(some, "A", "B", q; radar = false) === nothing
-    @test check_resolved(some, "A", "B", q; radar = true) === nothing
-    @test_throws "no point of the pair resolved. early A median 0.00306, data in 100.0% of samples; late B median 0.166, data in 100.0% of samples; brightness difference 34.7 dB" check_resolved(none, "A", "B", q; radar = false)
-    @test_throws AutoriftItsLiveProduction.NoProduct check_resolved(none, "A", "B", q; radar = false)
-    # A radar pair with nothing wrong with its images is an error, not a pair with no velocity.
-    @test_throws ErrorException("no point of the radar pair resolved, though neither image is empty or flat, so no product is written. early A median 0.00306, data in 100.0% of samples; late B median 0.166, data in 100.0% of samples; brightness difference 34.7 dB") check_resolved(none, "A", "B", q; radar = true)
+    @test check_resolved(some, "A", "B", q) === nothing
+    # Images with nothing wrong whose points the filter all rejected: a decorrelated pair, with no velocity.
+    @test_throws "no point of the pair resolved; no point both correlated and passed the displacement filter. early A median 0.00306, data in 100.0% of samples; late B median 0.166, data in 100.0% of samples; brightness difference 34.7 dB" check_resolved(none, "A", "B", q)
+    @test_throws AutoriftItsLiveProduction.NoProduct check_resolved(none, "A", "B", q)
     q = PairQuality(ImageSample(NaN, 0.0, false), ImageSample(0.166, 1.0, false), NaN)
-    @test_throws "no point of the pair resolved; the early image has no data in any sample window. early A median n/a" check_resolved(none, "A", "B", q; radar = false)
-    for radar in (false, true)
-        @test_throws AutoriftItsLiveProduction.NoProduct check_resolved(none, "A", "B", q; radar)
-    end
+    @test_throws "no point of the pair resolved; the early image has no data in any sample window. early A median n/a" check_resolved(none, "A", "B", q)
     flat = PairQuality(ImageSample(0.1, 1.0, true), ImageSample(0.166, 1.0, false), NaN)
-    @test_throws AutoriftItsLiveProduction.NoProduct check_resolved(none, "A", "B", flat; radar = true)
+    @test_throws AutoriftItsLiveProduction.NoProduct check_resolved(none, "A", "B", flat)
     # The valid percentage of the empty product is 0, so it is named _P000; one with nothing searched has no
     # denominator and is 0 too.
     @test AutoriftItsLiveProduction.valid_percentage(none) == 0.0

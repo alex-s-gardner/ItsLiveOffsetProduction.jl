@@ -230,10 +230,8 @@ function s1_swath_bias(c::GoldenCase, s::Setup, p)
                                                    bd.same_platform, bd.reference_platform)
 end
 
-# A `UtcTime`'s instant as a `DateTime`, truncated to the millisecond `ImagePairInfo.acquisition_date_img1`
-# carries (see its docstring: the reference's own microsecond precision is lost the same way on the
-# optical path).
-_s1_datetime(t) = t.datetime + Dates.Millisecond(round(Int, t.seconds * 1000))
+# A `UtcTime`'s instant to the microsecond `ImagePairInfo.acquisition_date_img1` carries.
+_s1_datetime(t) = ItsLiveOffsetProduction.UtcMicros(t.datetime, round(Int64, t.seconds * 1_000_000))
 
 # Splits a Sentinel-1 product id (or `burst2safe`'s synthesized SAFE name, same layout —
 # `S1A_IW_SLC__1SSH_<start>_<stop>_<orbit>_<datatake>_<productid>`, ten fields because `SLC__1SSH`
@@ -298,12 +296,12 @@ function s1_img_pair_info(c::GoldenCase, s::Setup, roi_valid::Real)
 end
 
 # A NISAR `zeroDopplerStartTime`/`zeroDopplerEndTime`-style HDF5 string
-# ("2025-10-28T23:52:01.000000000", nanosecond precision) as a `DateTime`, truncated the same way
-# `_s1_datetime` truncates a `UtcTime`.
+# ("2025-10-28T23:52:01.000000000", nanosecond precision), truncated to the microsecond as the app's
+# `parse_utc` truncates it.
 function _nisar_datetime(s::AbstractString)
     whole, frac = split(s, '.'; limit = 2)
     dt = Dates.DateTime(whole, Dates.dateformat"yyyy-mm-ddTHH:MM:SS")
-    return dt + Dates.Millisecond(round(Int, parse(Float64, "0." * frac) * 1000))
+    return ItsLiveOffsetProduction.UtcMicros(dt, parse(Int, rpad(first(frac, 6), 6, '0')))
 end
 
 # `IMG_INFO_DICT` common to both NISAR schemas, from the two products' `Identification`.

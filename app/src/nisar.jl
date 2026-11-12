@@ -159,13 +159,6 @@ function gslc_image(g::GslcScene, offset::NTuple{2,Int}, want::Tuple{Int,Int}; d
     return fill_tiles!(TileCache(w; tile = 1024, dir, io = cache_io, origin); inflight = remote_tiles_in_flight())
 end
 
-# A NISAR `zeroDopplerStartTime` ("2025-10-28T23:52:01.000000000") as a `DateTime`, its fraction rounded
-# to the millisecond.
-function nisar_datetime(s::String)
-    whole, frac = split(s, '.'; limit = 2)
-    return parse_utc(whole) + Dates.Millisecond(round(Int, parse(Float64, "0." * frac) * 1000))
-end
-
 """
     nisar_img_pair_info(early, late, id1, id2, roi_valid, lon, lat) -> ItsLiveOffsetProduction.ImagePairInfo
 
@@ -185,7 +178,7 @@ function nisar_img_pair_info(early::String, late::String, id1::SLCDatasets.Ident
     extra["flight_direction_img2"] = lowercase(id2.pass_direction)
     extra["absolute_orbit_number_img1"] = Int64(id1.absolute_orbit)
     extra["absolute_orbit_number_img2"] = Int64(id2.absolute_orbit)
-    return ItsLiveOffsetProduction.ImagePairInfo(nisar_datetime(id1.start_time), nisar_datetime(id2.start_time),
+    return ItsLiveOffsetProduction.ImagePairInfo(parse_utc(id1.start_time), parse_utc(id2.start_time),
                                                  "N", "N", Int64(1), Int64(1), roi_valid,
                                                  round(lat; digits = 2), round(lon; digits = 2), extra)
 end

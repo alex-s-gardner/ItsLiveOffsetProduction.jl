@@ -553,7 +553,7 @@ function tide_correct(s::RadarSetup, x::Vector{Float64}, y::Vector{Float64}, lon
     isempty(idx) && return dx
     coord = s.pair.coordinate
     half = Dates.Millisecond(round(Int, 1000 * coord.nlines / coord.prf / 2))
-    t1, t2 = info.acquisition_date_img1 + half, info.acquisition_date_img2 + half
+    t1, t2 = DateTime(info.acquisition_date_img1) + half, DateTime(info.acquisition_date_img2) + half
     v = vertical_motion(ts, idx, w, x, y, lonlat, t1, t2)
     samples, cosθ = cos_incidence(coord)
     out = copy(dx)
@@ -726,7 +726,7 @@ end
 
 # The midpoint of a NISAR scene's zero-Doppler start and end.
 _mid_time(id::SLCDatasets.Identification) =
-    (t = nisar_datetime(id.start_time); t + (nisar_datetime(id.stop_time) - t) ÷ 2)
+    DateTime(ItsLiveOffsetProduction.midpoint(parse_utc(id.start_time), parse_utc(id.stop_time)))
 
 """
     map_offset_pixels(ex, ny, spacing) -> (px, py)

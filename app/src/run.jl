@@ -206,10 +206,6 @@ end
 is_aster(s::Setup) = s.job.platform == "AST"
 is_aster(s) = false
 
-# Whether a setup is a radar pair's: Sentinel-1, NISAR L1, or NISAR L2.
-is_radar(s::RadarSetup) = true
-is_radar(s::Setup) = s.job.platform == "NISAR-L2"
-
 function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
                                 filter_tile::Union{Nothing,Int}, masked::Bool, output::String, o::RunOptions,
                                 dir::String)
@@ -219,7 +215,7 @@ function _correlate_and_package(s, img::Imagery, pre::AutoRIFT.PreprocessMethod,
         t0 = time_ns()
         c = correlate(s, img, pre; filter_tile, cache_io = o.cache_io, masked, scratch = dir)
         _log(o, "correlate", t0)
-        check_resolved(c, s.early.name, s.late.name, q; radar = is_radar(s))
+        check_resolved(c, s.early.name, s.late.name, q)
         t0 = time_ns()
         path = package(s, c, output; o.tide, o.tide_model)
         _log(o, "package", t0)

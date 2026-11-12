@@ -1,4 +1,46 @@
-using Dates: DateTime
+using Dates: Dates, DateTime
+
+"""
+    UtcMicros(us)
+    UtcMicros(t::DateTime, us = 0)
+
+A UTC instant to the microsecond: `us` microseconds since the GPS epoch, 1980-01-06T00:00:00. Built from a
+`DateTime` (milliseconds) plus `us` further microseconds, for a source that records finer than a millisecond.
+The difference of two is a `Dates.Microsecond`.
+"""
+struct UtcMicros
+    us::Int64
+end
+
+# The GPS epoch in `DateTime`'s own milliseconds.
+const GPS_EPOCH_MS = Dates.value(DateTime(1980, 1, 6))
+
+UtcMicros(t::DateTime, us::Integer = 0) = UtcMicros((Dates.value(t) - GPS_EPOCH_MS) * 1000 + Int64(us))
+Base.convert(::Type{UtcMicros}, t::DateTime) = UtcMicros(t)
+
+Base.isless(a::UtcMicros, b::UtcMicros) = a.us < b.us
+Base.:-(a::UtcMicros, b::UtcMicros) = Dates.Microsecond(a.us - b.us)
+Base.:+(a::UtcMicros, d::Dates.Microsecond) = UtcMicros(a.us + Dates.value(d))
+
+"""
+    DateTime(t::UtcMicros) -> DateTime
+
+`t` truncated to the millisecond.
+"""
+Dates.DateTime(t::UtcMicros) = DateTime(Dates.UTM(GPS_EPOCH_MS + fld(t.us, 1000)))
+Dates.year(t::UtcMicros) = Dates.year(DateTime(t))
+
+"""
+    midpoint(a::UtcMicros, b::UtcMicros) -> UtcMicros
+
+`a + (b - a) / 2`, the half microsecond rounded to even as Python's `timedelta` division rounds it.
+"""
+function midpoint(a::UtcMicros, b::UtcMicros)
+    span = b.us - a.us
+    h = span >> 1
+    isodd(span) && isodd(h) && (h += 1)
+    return UtcMicros(a.us + h)
+end
 
 """
     GeogridCoefficients
@@ -141,14 +183,12 @@ attribute (`id_img1`, `sensor_img1`, orbit numbers, path/row, and so on) through
 given as any dictionary whose values [`attrvalue`](@ref) accepts. Sourcing those from raw sensor
 metadata (SAFE XML, MTL, HDF5, STAC) is outside this package.
 
-`DateTime` is millisecond-precision, one thousand times coarser than the reference's microsecond
-timestamps; `date_center` therefore loses precision `write` cannot recover. `time` and `date_created`
-are excluded from the golden-test comparison for an unrelated reason (an unseeded hash), but
-`date_center` is not, so this is a real, if usually negligible, source of mismatch.
+The acquisition dates are [`UtcMicros`](@ref), the microsecond precision the reference records; either may
+be given as a `DateTime`.
 """
 struct ImagePairInfo
-    acquisition_date_img1::DateTime
-    acquisition_date_img2::DateTime
+    acquisition_date_img1::UtcMicros
+    acquisition_date_img2::UtcMicros
     mission_img1::String
     mission_img2::String
     satellite_img1::Union{String,Int64}

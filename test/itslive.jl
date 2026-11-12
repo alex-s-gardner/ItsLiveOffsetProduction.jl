@@ -338,6 +338,48 @@ end
     end
 end
 
+@testset "acquisition dates and time are written to the microsecond" begin
+    U = ItsLiveOffsetProduction.UtcMicros
+    # The reference's own values for a captured Landsat 8 pair (golden LC08_L1TP_009011, P078).
+    t1 = U(DateTime(2020, 7, 3, 15, 0, 24), 531_814)
+    t2 = U(DateTime(2020, 8, 20, 15, 0, 40), 287_670)
+    dt, center = ItsLiveOffsetProduction._date_dt_center(t1, t2)
+    @test dt == 48.000182359444445
+    @test ItsLiveOffsetProduction._format_date_stripped(center) == "20200727T15:00:32.409742"
+    @test ItsLiveOffsetProduction._format_date_stripped(t2) == "20200820T15:00:40.28767"
+    # Python's `timedelta / 2` rounds half to even.
+    @test ItsLiveOffsetProduction.midpoint(U(0), U(3)) == U(2)
+    @test ItsLiveOffsetProduction.midpoint(U(0), U(5)) == U(2)
+    @test DateTime(t1) == DateTime(2020, 7, 3, 15, 0, 24, 531)
+
+    n = 10
+    xs = collect(range(-3_440_587.5; step = 120.0, length = n))
+    ys = collect(range(245_707.5; step = -120.0, length = n))
+    georef = ItsLiveGeoref(xs, ys, cf_grid_mapping(3413), (x, y) -> (-45.0, 65.0), 15.0, 15.0)
+    info = ImagePairInfo(t1, t2, "L", "L", "8", "8", 80.0, 65.0, -45.0, Dict{String,Any}())
+    coeffs = GeogridCoefficients(ones(n, n), zeros(n, n), zeros(n, n), ones(n, n), ones(n, n), ones(n, n),
+                                 nothing, nothing)
+    refv = ReferenceVelocity(zeros(Float32, n, n), zeros(Float32, n, n))
+    input = ItsLiveInput(:optical, "feature", "map", "1.0.0", "params.shp", "unit-test", nothing, georef, info,
+                         coeffs, refv, trues(n, n), nothing, fill(0.5f0, n, n), fill(0.2f0, n, n),
+                         fill(UInt16(32), n, n), 1.0, falses(n, n))
+    path = tempname() * ".nc"
+    try
+        write_product(path, input)
+        NCDataset(path) do ds
+            a = ds["img_pair_info"].attrib
+            @test (a["acquisition_date_img1"], a["date_center"], a["date_dt"]) ==
+                  ("20200703T15:00:24.531814", "20200727T15:00:32.409742", 48.000182359444445)
+            tv = ds["time"]
+            @test tv.attrib["units"] == "microseconds since 1980-01-06T00:00:00+00:00"
+            @test eltype(tv.var) == Int64
+            @test tv.var[1] - tv.attrib["microseconds_added"] == center.us
+        end
+    finally
+        rm(path; force = true)
+    end
+end
+
 @testset "product_filename follows the reference's naming" begin
     a = "LC08_L1TP_009011_20200703_20200913_02_T1"
     b = "LC08_L1TP_009011_20200820_20200905_02_T1"

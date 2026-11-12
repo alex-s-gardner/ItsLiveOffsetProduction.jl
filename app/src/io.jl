@@ -164,11 +164,11 @@ StructTypes.StructType(::Type{MtlFile}) = StructTypes.Mutable()
 StructTypes.StructType(::Type{MtlDocument}) = StructTypes.Mutable()
 
 """
-    landsat_acquisition(mtl_uri) -> (product_id, acquisition_time)
+    landsat_acquisition(mtl_uri) -> (product_id, acquisition_time::UtcMicros)
 
 The product id and the acquisition instant from a Landsat `_MTL.json`: `DATE_ACQUIRED` and
-`SCENE_CENTER_TIME` (`15:00:24.5318140Z`), truncated to the millisecond a `DateTime` holds — the same
-instant, at the same precision, as the STAC item's `properties.datetime`.
+`SCENE_CENTER_TIME` (`15:00:24.5318140Z`), truncated to the microsecond, as the STAC item's
+`properties.datetime` gives it.
 """
 function landsat_acquisition(mtl_uri::String)
     doc = JSON3.read(read_text(mtl_uri), MtlDocument)
@@ -179,10 +179,10 @@ function landsat_acquisition(mtl_uri::String)
 end
 
 """
-    parse_utc(s) -> DateTime
+    parse_utc(s) -> ItsLiveOffsetProduction.UtcMicros
 
-`YYYY-MM-DDTHH:MM:SS[.fff…][Z]`, truncated to the millisecond. Parsed field by field: a `DateFormat`
-parse builds its error messages at run time, which a trimmed program cannot.
+`YYYY-MM-DDTHH:MM:SS[.fff…][Z]`, truncated to the microsecond. Parsed field by field: a `DateFormat` parse
+builds its error messages at run time, which a trimmed program cannot.
 """
 function parse_utc(s::AbstractString)
     t = endswith(s, "Z") ? s[1:(end - 1)] : s
@@ -191,13 +191,15 @@ function parse_utc(s::AbstractString)
     hms = split(time, ':')
     (length(ymd) == 3 && length(hms) == 3) || throw(ArgumentError("not a UTC timestamp: " * String(s)))
     sec = split(hms[3], '.'; limit = 2)
-    ms = 0
+    us = 0
     if length(sec) == 2
         f = sec[2]
-        ms = length(f) >= 3 ? parse(Int, f[1:3]) : parse(Int, f) * 10^(3 - length(f))
+        all(isdigit, f) || throw(ArgumentError("not a UTC timestamp: " * String(s)))
+        us = length(f) >= 6 ? parse(Int, view(f, 1:6)) : parse(Int, f) * 10^(6 - length(f))
     end
-    return DateTime(parse(Int, ymd[1]), parse(Int, ymd[2]), parse(Int, ymd[3]), parse(Int, hms[1]),
-                    parse(Int, hms[2]), parse(Int, sec[1]), ms)
+    whole = DateTime(parse(Int, ymd[1]), parse(Int, ymd[2]), parse(Int, ymd[3]), parse(Int, hms[1]),
+                     parse(Int, hms[2]), parse(Int, sec[1]))
+    return ItsLiveOffsetProduction.UtcMicros(whole, us)
 end
 
 # `YYYYMMDD`, as a scene name or an object key carries a date: field by field, as `Dates.format` is not
