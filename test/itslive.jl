@@ -299,8 +299,7 @@ end
     # One chunk per time step along the unlimited `time`.
     @test s1["chunks"] == Dict("time" => (:chunked, (1,)), "img_pair_info" => (:chunked, (1,)))
     @test occursin("AutoRIFT.jl: https://doi.org/10.5281/zenodo.24147369", s1["references"])
-    @test occursin("ItsLiveOffsetProduction.jl: https://github.com/alex-s-gardner/ItsLiveOffsetProduction.jl",
-                   s1["references"])
+    @test occursin("ItsLiveOffsetProduction.jl: https://doi.org/10.5281/zenodo.24148598", s1["references"])
     @test !occursin("HyP3 autoRIFT plugin", s1["references"])
     plain = s1["img_pair_info"].attrib
     @test (plain["tide_correction_flag"], plain["geometric_correction_flag"]) == (0, 0)
