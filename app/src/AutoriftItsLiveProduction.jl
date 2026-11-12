@@ -9,6 +9,7 @@ whose type would depend on file contents is resolved by an explicit branch.
 module AutoriftItsLiveProduction
 
 using Dates: Dates, Date, DateTime
+using NanoDates: NanoDate
 import Mmap
 import NetworkOptions
 import AutoRIFT

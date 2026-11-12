@@ -2,7 +2,7 @@
 
 julia_version = "1.13.0"
 manifest_format = "2.1"
-project_hash = "9c74ed105066e877544fd87d334c0c26af19d09d"
+project_hash = "fd6baeb584b18f8143a1234561bbe2df84508796"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -128,7 +128,7 @@ version = "0.2.1"
     Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 
 [[deps.AutoriftItsLiveProduction]]
-deps = ["AutoRIFT", "ChunkManifests", "Dates", "FastGeoProjections", "GDAL", "GeoFormatTypes", "ImagePairGeometry", "ItsLiveOffsetProduction", "JSON3", "Mmap", "NetworkOptions", "OpticalDatasets", "SLCDatasets", "StructTypes", "Zarr", "ZarrCore", "ZarrZlib"]
+deps = ["AutoRIFT", "ChunkManifests", "Dates", "FastGeoProjections", "GDAL", "GeoFormatTypes", "ImagePairGeometry", "ItsLiveOffsetProduction", "JSON3", "Mmap", "NanoDates", "NetworkOptions", "OpticalDatasets", "SLCDatasets", "StructTypes", "Zarr", "ZarrCore", "ZarrZlib"]
 path = "."
 uuid = "2548e727-6365-4c30-83ec-f8cedf283c4c"
 version = "0.1.0"
@@ -528,7 +528,7 @@ uuid = "1d5cc7b8-4909-519e-a0f8-d0f5ad9712d0"
 version = "2025.2.0+0"
 
 [[deps.ItsLiveOffsetProduction]]
-deps = ["AutoRIFT", "Dates", "FastGeoProjections", "GDAL", "GeoFormatTypes", "ImagePairGeometry", "NetCDF_jll", "PrecompileTools", "Statistics"]
+deps = ["AutoRIFT", "Dates", "FastGeoProjections", "GDAL", "GeoFormatTypes", "ImagePairGeometry", "NanoDates", "NetCDF_jll", "PrecompileTools", "Statistics"]
 path = ".."
 uuid = "74356795-1a89-4ad9-90d1-877978e2d409"
 version = "0.1.0"
@@ -770,6 +770,13 @@ version = "1.11.0"
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
 version = "2026.8.13"
 
+[[deps.NanoDates]]
+deps = ["Dates", "Parsers"]
+git-tree-sha1 = "9436b2edeba22c86132df1485971b159fe8a6bfc"
+registries = "General"
+uuid = "46f1a544-deae-4307-8689-c12aa3c955c6"
+version = "2.1.2"
+
 [[deps.NetCDF_jll]]
 deps = ["Artifacts", "Blosc_jll", "Bzip2_jll", "HDF5_jll", "JLLWrappers", "LazyArtifacts", "LibCURL_jll", "Libdl", "MPIABI_jll", "MPICH_jll", "MPIPreferences", "MPItrampoline_jll", "MicrosoftMPI_jll", "OpenMPI_jll", "TOML", "XML2_jll", "Zlib_jll", "Zstd_jll", "libaec_jll", "libzip_jll"]
 git-tree-sha1 = "bbd7ae15594503021b388a1090cca6ea431e0a8f"
@@ -816,12 +823,12 @@ uuid = "458c3c95-2e84-50aa-8efc-19380b2a3a95"
 version = "3.5.6+0"
 
 [[deps.OpticalDatasets]]
-deps = ["ChunkManifests", "Dates", "DiskArrays", "OpenJpeg_jll", "Zarr"]
-git-tree-sha1 = "b5d68cc6c94b27fcf02544834135b32c107a2652"
+deps = ["ChunkManifests", "Dates", "DiskArrays", "NanoDates", "OpenJpeg_jll", "Zarr"]
+git-tree-sha1 = "7caea9c5dcad876c1be28a20a5223a718ae29f83"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/OpticalDatasets.jl"
 uuid = "a0fc030c-aaa4-4e24-9fdc-1cbe49ce0bda"
-version = "0.2.0"
+version = "0.3.0"
 
 [[deps.OrderedCollections]]
 git-tree-sha1 = "b079a6affebde167dad8ffe0d670b53917fbcb68"

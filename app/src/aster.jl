@@ -82,7 +82,7 @@ and correction level (`"L1T"`) of the collection the granule name belongs to; an
 name carries. It carries none of Landsat's path, row and collection.
 """
 aster_identification(name::String) =
-    OpticalDatasets.Identification(name, "T", "1", ASTER_SENSOR, ASTER_CORRECTION_LEVEL, aster_acquisition(name),
+    OpticalDatasets.Identification(name, "T", "1", ASTER_SENSOR, ASTER_CORRECTION_LEVEL, NanoDate(aster_acquisition(name)),
                                    nothing, nothing, nothing, nothing, nothing)
 
 # ---------------------------------------------------------------------------
