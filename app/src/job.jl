@@ -68,7 +68,8 @@ end
 """
     Job
 
-One pair to process: the sensor and its platform, the two scenes, and the product name for messages.
+One pair to process: the sensor and its platform, the two scenes, the product name for messages, and the
+OPERA frame ID a Sentinel-1 product records as `frame_img1`/`frame_img2` (empty for none).
 """
 struct Job
     sensor::String
@@ -76,10 +77,13 @@ struct Job
     reference::SceneSource
     secondary::SceneSource
     product::String
+    frame_id::String
 end
 
-function Job(sensor::String, reference::String, secondary::String; subset::String = "")
+function Job(sensor::String, reference::String, secondary::String; subset::String = "", frame_id::String = "")
     spec = sensor_spec(sensor)
+    !isempty(frame_id) && !startswith(spec.platform, "S1") && throw(ArgumentError(
+        "--frame-id names a Sentinel-1 pair's OPERA frame; sensor " * sensor * " takes none"))
     given = (reference, secondary)
     spec.platform == "S1-BURST" && ((reference, secondary) = resolve_burst_ids(reference, secondary))
     if !isempty(subset)
@@ -99,7 +103,7 @@ function Job(sensor::String, reference::String, secondary::String; subset::Strin
     occursin(spec.secondary, sec.name) || throw(ArgumentError(
         "the secondary input \"" * given[2] * "\" is scene " * sec.name * ", which cannot pair with a " *
         sensor * " scene"))
-    return Job(sensor, spec.platform, ref, sec, ref.name * "_X_" * sec.name)
+    return Job(sensor, spec.platform, ref, sec, ref.name * "_X_" * sec.name, frame_id)
 end
 
 """

@@ -1,7 +1,7 @@
 # The command line a production run is given: the sensor read from the inputs when not named, the
 # output path optional, the upload options, and Earthdata credentials from the environment.
 
-using AutoriftItsLiveProduction: parse_args, infer_sensor, with_earthdata_netrc, s1_orbit_kind, s1_orbit_file
+using AutoriftItsLiveProduction: parse_args, infer_sensor, with_earthdata_netrc, s1_orbit_kind, s1_orbit_file, Job
 
 const L8A = "LC08_L1TP_021248_20210507_20210517_02_T1"
 const L8B = "LC08_L1TP_021248_20220611_20220617_02_T1"
@@ -63,12 +63,23 @@ end
     @test infer_sensor(L8A; subset = poly) == "L8"
 end
 
+@testset "a Sentinel-1 pair's OPERA frame is given with --frame-id" begin
+    r1 = "S1B_IW_SLC__1SDH_20180630T095955_20180630T100022_011601_015537_A96A"
+    s1 = "S1B_IW_SLC__1SDH_20180712T095955_20180712T100022_011776_015AA2_1C61"
+    a = parse_args([r1, s1, "--frame-id", "13201"])
+    @test a.frame_id == "13201"
+    @test Job("S1", a.reference, a.secondary; a.frame_id).frame_id == "13201"
+    @test Job("S1", r1, s1).frame_id == ""
+    @test_throws "--frame-id names a Sentinel-1 pair's OPERA frame; sensor L8 takes none" Job("L8", L8A, L8B;
+                                                                                                frame_id = "13201")
+end
+
 @testset "an option given None, empty, or an empty geometry is unset (#47)" begin
     plain = parse_args([L8A, L8B])
     for unset in ("None", "", " ")
         a = parse_args([L8A, L8B, "--dem", unset, "--orbit-dir", unset, "--subset", unset, "--bucket", unset,
-                        "--bucket-prefix", unset, "--publish-bucket", unset, "--tide-model", unset])
-        @test (a.subset, a.bucket, a.bucket_prefix, a.publish_bucket) == ("", "", "", "")
+                        "--bucket-prefix", unset, "--publish-bucket", unset, "--tide-model", unset, "--frame-id", unset])
+        @test (a.subset, a.frame_id, a.bucket, a.bucket_prefix, a.publish_bucket) == ("", "", "", "", "")
         @test (a.options.dem, a.options.orbit_dir, a.options.tide, a.options.tide_model) ==
               (plain.options.dem, plain.options.orbit_dir, true, "")
     end

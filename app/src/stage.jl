@@ -57,5 +57,5 @@ function stage_bands(c::Job, dir::String)
     # Neither is writing into `dir` any longer when an error is reported.
     _settle(a)
     _settle(b)
-    return Job(c.sensor, c.platform, _await(a)::SceneSource, _await(b)::SceneSource, c.product)
+    return Job(c.sensor, c.platform, _await(a)::SceneSource, _await(b)::SceneSource, c.product, c.frame_id)
 end

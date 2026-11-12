@@ -627,7 +627,8 @@ end
 `IMG_INFO_DICT` for a Sentinel-1 pair: the satellites, orbits, datatakes and product ids out of the two
 product ids (`S1A_IW_SLC__1SSH_<start>_<stop>_<orbit>_<datatake>_<id>`), the pass directions out of the
 annotations, the acquisition times as the two mosaics' sensing starts, and which orbit each scene was
-geolocated with (`orbit_type_img1/2`, `POEORB` or `RESORB`, [`s1_orbit_kind`](@ref)).
+geolocated with (`orbit_type_img1/2`, `POEORB` or `RESORB`, [`s1_orbit_kind`](@ref)), and, when the job names
+one, the OPERA frame both scenes lie in (`frame_img1/2`).
 """
 function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::Float64)
     rp, sp = s.early_product, s.late_product
@@ -655,6 +656,7 @@ function s1_img_pair_info(s::RadarSetup, roi_valid::Float64, lon::Float64, lat::
     extra["product_unique_ID_img2"] = String(f2[10])
     extra["orbit_type_img1"] = s1_orbit_kind(rp.orbit_path)
     extra["orbit_type_img2"] = s1_orbit_kind(sp.orbit_path)
+    isempty(s.job.frame_id) || (extra["frame_img1"] = extra["frame_img2"] = s.job.frame_id)
     return ItsLiveOffsetProduction.ImagePairInfo(s1_datetime(t1), s1_datetime(t2), "S", "S",
                                                  String(f1[1][2:end]), String(f2[1][2:end]), roi_valid,
                                                  round(lat; digits = 2), round(lon; digits = 2), extra)
