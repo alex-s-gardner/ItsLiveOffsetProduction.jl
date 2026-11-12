@@ -48,7 +48,7 @@ const REFERENCES = join([
     "",
     "Additionally, DOI's are provided for the software used to generate this data:",
     "* AutoRIFT.jl: https://doi.org/10.5281/zenodo.24147369",
-    "* ItsLiveOffsetProduction.jl: https://github.com/alex-s-gardner/ItsLiveOffsetProduction.jl",
+    "* ItsLiveOffsetProduction.jl: https://doi.org/10.5281/zenodo.24148598",
     "* HyP3 processing environment: https://doi.org/10.5281/zenodo.3962581",
 ], "\n")
 
