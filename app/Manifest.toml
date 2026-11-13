@@ -929,7 +929,7 @@ version = "0.1.0"
 
 [[deps.SLCDatasets]]
 deps = ["ChunkManifests", "Dates", "DiskArrays", "EzXML", "NanoDates", "StaticArrays", "Zarr", "ZarrCore", "ZarrZlib"]
-git-tree-sha1 = "5487d1224bdb6ab673a389230d41877e6efd9d5a"
+git-tree-sha1 = "8ccfbe450d9daebab3aff02ecb5f7e55e1013b52"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/SLCDatasets.jl"
 uuid = "1d8f5cac-0b48-4ea8-8d35-4fce00b6c96f"
