@@ -281,8 +281,9 @@ function merge_pieces(rp::S1Product, bursts)
         ra = SLCDatasets.annotation(rp, sw)
         xoff = round(Int, (ra.starting_range - box.starting_range) / box.dr)
         for i in 1:SLCDatasets.nbursts(ra)
+            p = get(bursts, (sw, i), nothing)
+            p === nothing && continue
             yoff = round(Int, SLCDatasets.seconds_between(box.sensing_start, ra.burst_start[i]) / box.dt)
-            p = bursts[(sw, i)]
             fl, ll, fs, ls = coregistered_window(valid_window(ra, i), p.svalid, p.dl, p.ds)
             (fl <= ll && fs <= ls) || continue
             push!(pieces, MergePiece(sw, i, fl:ll, fs:ls, (yoff + fl + 1):(yoff + ll + 1), (xoff + fs + 1):(xoff + ls + 1)))
@@ -474,34 +475,58 @@ struct SecondaryBurst
     extent::Tuple{Int,Int}
 end
 
+# Bursts of one track and subswath on two passes start within this much of the same time after the
+# ascending node. A burst lasts about 2.76 s, and the ESA burst ID grid is that wide; the orbit is
+# controlled to a fraction of a second.
+const S1_ANX_MATCH = 1.0
+
+"""
+    matching_burst(ra, sa, i) -> Union{Int,Nothing}
+
+The burst of subswath annotation `sa` that images the ground of burst `i` of `ra`: the one that starts
+within [`S1_ANX_MATCH`](@ref) of the same time after the ascending node, or `nothing` if `sa` holds none.
+
+Bursts are matched by that time, not by index, because two products of one track need not start a
+subswath on the same burst: an S1A and an S1C frame are a burst apart in IW1 and IW3 but not in IW2.
+"""
+function matching_burst(ra, sa, i::Int)
+    t = ra.burst_anx_time[i]
+    return findfirst(s -> abs(s - t) < S1_ANX_MATCH, sa.burst_anx_time)
+end
+
 """
     solve_secondary_bursts(rp, sp, dem) -> Dict{Tuple{Int,Int},SecondaryBurst}
 
-Every secondary burst's [`SecondaryBurst`](@ref), keyed by subswath and burst, from the annotations, the
-orbits and `dem` alone: no raster is read.
+Every reference burst's matching secondary burst ([`matching_burst`](@ref)) as a
+[`SecondaryBurst`](@ref), keyed by subswath and reference burst, from the annotations, the orbits and `dem`
+alone: no raster is read. A reference burst with no secondary partner has no entry.
 """
 function solve_secondary_bursts(rp::S1Product, sp::S1Product, dem::D) where {D}
+    jobs = Tuple{Int,Int,Int}[]
     for sw in rp.swaths
-        SLCDatasets.nbursts(SLCDatasets.annotation(sp, sw)) >= SLCDatasets.nbursts(SLCDatasets.annotation(rp, sw)) ||
-            throw(ArgumentError("the secondary's IW" * string(sw) * " has fewer bursts than the reference's"))
+        ra, sa = SLCDatasets.annotation(rp, sw), SLCDatasets.annotation(sp, sw)
+        for i in 1:SLCDatasets.nbursts(ra)
+            k = matching_burst(ra, sa, i)
+            k === nothing || push!(jobs, (sw, i, k))
+        end
     end
-    jobs = [(sw, i) for sw in rp.swaths for i in 1:SLCDatasets.nbursts(SLCDatasets.annotation(rp, sw))]
-    tasks = map(jobs) do (sw, i)
+    isempty(jobs) && throw(ArgumentError("no burst of the reference has a matching burst in the secondary"))
+    tasks = map(jobs) do (sw, i, k)
         Threads.@spawn begin
             a, sa = SLCDatasets.annotation(rp, sw), SLCDatasets.annotation(sp, sw)
             # The source burst's shape is the secondary's own, which need not be the reference's: it sets
-            # where burst `i` starts in the stacked raster, the carrier's middle line, and every bound
+            # where burst `k` starts in the stacked raster, the carrier's middle line, and every bound
             # `ResampSlc` takes off its source grid.
             slpb, sspb = sa.lines_per_burst, sa.samples_per_burst
-            ss = SLCDatasets.bursts(sp, sw)[i]
+            ss = SLCDatasets.bursts(sp, sw)[k]
             cs = radar_coordinate(ss)
             carrier = CarrierFit(TopsCarrier(ss, cs, slpb), slpb, sspb)
             dl, ds = offset_lattice(radar_coordinate(SLCDatasets.bursts(rp, sw)[i]), cs, dem,
                                     a.lines_per_burst, a.samples_per_burst)
-            SecondaryBurst(((i - 1) * slpb + 1):(i * slpb), carrier, dl, ds, valid_window(sa, i), (slpb, sspb))
+            SecondaryBurst(((k - 1) * slpb + 1):(k * slpb), carrier, dl, ds, valid_window(sa, k), (slpb, sspb))
         end
     end
-    return Dict{Tuple{Int,Int},SecondaryBurst}(j => fetch(t)::SecondaryBurst for (j, t) in zip(jobs, tasks))
+    return Dict{Tuple{Int,Int},SecondaryBurst}((sw, i) => fetch(t)::SecondaryBurst for ((sw, i, _), t) in zip(jobs, tasks))
 end
 
 """
