@@ -26,16 +26,18 @@ end
 """
     s1_orbit_file(name, orbit_dir, scratch) -> String
 
-The orbit file for product `name`: the one in `orbit_dir` whose validity covers the product's sensing start,
-a precise orbit (POEORB) before a restituted one (RESORB), when `orbit_dir` is given; else the one
-[`fetch_s1_orbit`](@ref) downloads into `scratch`.
+The orbit file for product `name`: the one in `orbit_dir` of the product's own spacecraft whose validity
+covers its sensing start, a precise orbit (POEORB) before a restituted one (RESORB), when `orbit_dir` is
+given; else the one [`fetch_s1_orbit`](@ref) downloads into `scratch`. A directory may hold several
+spacecraft's orbits over the same days.
 """
 function s1_orbit_file(name::String, orbit_dir::String, scratch::String)
     isempty(orbit_dir) && return fetch_s1_orbit(name, scratch)
-    _, start, _ = s1_name_times(name)
+    mission, start, _ = s1_name_times(name)
     # A precise orbit before a restituted one, whatever the names' order.
     files = sort(readdir(orbit_dir); by = f -> (!occursin("_AUX_POEORB_", f), f))
     for f in files
+        startswith(f, mission * "_") || continue
         m = match(r"_V(\d{8}T\d{6})_(\d{8}T\d{6})\.EOF$", f)
         m === nothing && continue
         a, b = _ccsds(String(something(m.captures[1]))), _ccsds(String(something(m.captures[2])))

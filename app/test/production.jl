@@ -154,4 +154,15 @@ end
         rm(joinpath(dir, "S1C_OPER_AUX_POEORB_OPOD_20261104T070000_V20261014T225942_20261016T005942.EOF"))
         @test occursin("_AUX_RESORB_", s1_orbit_file(scene, dir, dir))
     end
+    # A directory holding two spacecraft's precise orbits over the same day gives each scene its own; the
+    # S1A file sorts first and covers the S1B scene's start too.
+    mktempdir() do dir
+        a = "S1A_OPER_AUX_POEORB_OPOD_20210305T180558_V20171229T225942_20171231T005942.EOF"
+        b = "S1B_OPER_AUX_POEORB_OPOD_20210311T141716_V20171229T225942_20171231T005942.EOF"
+        touch(joinpath(dir, a)); touch(joinpath(dir, b))
+        @test basename(s1_orbit_file("S1B_IW_SLC__1SSH_20171230T195707_20171230T195733_008953_00FF97_CDAA", dir, dir)) == b
+        @test basename(s1_orbit_file("S1A_IW_SLC__1SSH_20171230T195748_20171230T195815_020024_0221A4_0000", dir, dir)) == a
+        rm(joinpath(dir, b))
+        @test_throws "no orbit file in" s1_orbit_file("S1B_IW_SLC__1SSH_20171230T195707_20171230T195733_008953_00FF97_CDAA", dir, dir)
+    end
 end
