@@ -9,7 +9,7 @@
 # against xarray's interpolation of the same ERA5 store.
 
 using Test
-using Dates: DateTime, Day, Hour, UTC, now
+using Dates: Dates, DateTime, Day, Hour, UTC, now
 using JSON3
 using AutoriftItsLiveProduction: CATS_MODEL, GR1KM_MODEL, BEDMACHINE_MASK, CATS_PROJECTION, GR1KM_PROJECTION,
                                  TIDE_BANDS, tide_constants, tide_point, tide_height, era5_pressure,
@@ -61,11 +61,14 @@ end
 
 # ERA5's preliminary record (ERA5T) runs about six days behind real time; a pair whose later scene is newer
 # than its end is corrected for the tide alone. A record that stops advancing would leave every new pair
-# without the inverse barometer, so it is caught here rather than in the products.
+# without the inverse barometer, so it is caught here rather than in the products. The record can lack a
+# day inside that span (the ARCO copy has no 2026-11-04), so the test asks for any of its last days, each
+# day read at noon, rather than one hour.
 const ERA5_MAX_LAG_DAYS = 10
 
 @testset "ERA5 reaches within $(ERA5_MAX_LAG_DAYS) days of now" begin
-    @test era5_pressure(now(UTC) - Day(ERA5_MAX_LAG_DAYS), [0.0], [-80.0]) !== nothing
+    noon = DateTime(Dates.today(UTC)) + Hour(12)
+    @test any(d -> era5_pressure(noon - Day(d), [0.0], [-80.0]) !== nothing, 1:ERA5_MAX_LAG_DAYS)
 end
 
 @testset "IFS pressure matches GDAL's bilinear read of the same runs" begin
