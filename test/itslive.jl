@@ -40,9 +40,9 @@ end
     dy = Float32.(50 .* randn(size(loc_x)))
     border12, border23, ncols = 1000.0, 2000.0, size(loc_x, 2)
 
-    sw = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, false, "S1A")
+    sw = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, ITSLIVE.swath_offset_bias("S1A", "S1B"))
     dxc, dyc = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw, 1.0)
-    out1, out2, out3, out4 = ITSLIVE.SWATH_OFFSET_BIAS_REF
+    out1, out2, out3, out4 = ITSLIVE.SWATH_OFFSET_BIAS[("S1A", "S1B")]
 
     # One column well inside each of the three subswaths: IW1 untouched, IW2 shifted once, IW3
     # shifted by both borders' entries — the "mask2 is a superset of mask1" cumulative effect that is
@@ -55,16 +55,30 @@ end
     @test dxc[1, iw3] - dx[1, iw3] ≈ -out1 - out3
     @test dyc[1, iw3] - dy[1, iw3] ≈ -out2 - out4
 
-    # Sentinel-1B: the reference's own table sign-flipped (`netcdf_output.py:1373-1374`).
-    sw_b = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, false, "S1B")
-    dxc_b, = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw_b, 1.0)
+    # The reverse order is corrected by the negated step.
+    sw_b = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, ITSLIVE.swath_offset_bias("S1B", "S1A"))
+    dxc_b, dyc_b = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw_b, 1.0)
     @test dxc_b[1, iw2] - dx[1, iw2] ≈ out1
+    @test dyc_b[1, iw3] - dy[1, iw3] ≈ out2 + out4
 
-    # A same-platform pair is not corrected at all, and the arrays it returns are the inputs
-    # themselves — not equal copies, since a caller checking that no work was done should see it.
-    sw_same = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, true, "S1A")
-    dxc_s, dyc_s = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw_same, 1.0)
-    @test dxc_s === dx && dyc_s === dy
+    # Each pair takes its own step: S1A × S1C has a smaller IW1/IW2 azimuth step and none at IW2/IW3.
+    c1, c2, c3, c4 = ITSLIVE.SWATH_OFFSET_BIAS[("S1A", "S1C")]
+    sw_c = SwathOffsetBias(loc_x, loc_y, 1.0, ncols, border12, border23, ITSLIVE.swath_offset_bias("S1C", "S1A"))
+    dxc_c, dyc_c = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw_c, 1.0)
+    # The offsets are Float32 of order 50 px, so a step of a few thousandths survives to about 1e-5 px.
+    @test dyc_c[1, iw2] - dy[1, iw2] ≈ c2 atol = 1.0e-5
+    @test dyc_c[1, iw3] - dy[1, iw3] ≈ c2 + c4 atol = 1.0e-5
+    @test c4 == 0
+end
+
+@testset "a pair's subswath step is the reverse pair's negated" begin
+    for ((r, s2), b) in ITSLIVE.SWATH_OFFSET_BIAS
+        @test ITSLIVE.swath_offset_bias(r, s2) == b
+        @test ITSLIVE.swath_offset_bias(s2, r) == .-b
+    end
+    # A same-spacecraft pair, and a pair the table holds in neither order, have no step.
+    @test ITSLIVE.swath_offset_bias("S1A", "S1A") === nothing
+    @test ITSLIVE.swath_offset_bias("S1B", "S1C") === nothing
 end
 
 @testset "low-variance borders trigger the coarse-grid smoothing" begin
@@ -75,9 +89,9 @@ end
     ncols = size(loc_x, 2)
     border12, border23 = 1000.0, 2000.0
 
-    sw = SwathOffsetBias(loc_x, loc_y, 10.0, ncols, border12, border23, false, "S1A")
+    sw = SwathOffsetBias(loc_x, loc_y, 10.0, ncols, border12, border23, ITSLIVE.swath_offset_bias("S1A", "S1B"))
     dxc, dyc = ITSLIVE._swath_offset_bias_correct(dx, dy, coeffs, sw, 1.0)
-    out1, out2, out3, out4 = ITSLIVE.SWATH_OFFSET_BIAS_REF
+    out1, out2, out3, out4 = ITSLIVE.SWATH_OFFSET_BIAS[("S1A", "S1B")]
 
     # The coarse-grid roundtrip touches every point (`rotate_vel2radar` rebuilds `output_vel_x1` from
     # the smoothed coarse grid unconditionally), so nothing here should ever end up `NaN` starting
@@ -141,7 +155,7 @@ end
     refv = ReferenceVelocity(zeros(Float32, ny, nx), zeros(Float32, ny, nx))
     loc_x = repeat(reshape(Float64.(0:(nx - 1)), 1, nx), ny, 1)
     loc_y = repeat(reshape(Float64.(0:(ny - 1)), ny, 1), 1, nx)
-    sw = SwathOffsetBias(loc_x, loc_y, 1.0, nx, 20.0, 40.0, false, "S1A")
+    sw = SwathOffsetBias(loc_x, loc_y, 1.0, nx, 20.0, 40.0, ITSLIVE.swath_offset_bias("S1A", "S1B"))
 
     input = ItsLiveInput(:radar, "feature", "radar", "1.0.0", "params.shp", "unit-test",
                                   12.0 * 86400, georef, info, coeffs, refv, trues(ny, nx), sw,
@@ -240,7 +254,7 @@ end
                                           ones(n, n), ones(n, n), nothing, nothing)
     refv = ReferenceVelocity(zeros(Float32, n, n), zeros(Float32, n, n))
     loc = repeat(reshape(Float64.(0:(n - 1)), 1, n), n, 1)
-    sw = SwathOffsetBias(loc, loc, 1.0, n, 3.0, 6.0, false, "S1A")
+    sw = SwathOffsetBias(loc, loc, 1.0, n, 3.0, 6.0, ITSLIVE.swath_offset_bias("S1A", "S1B"))
 
     input = ItsLiveInput(:optical, "feature", "map", "1.0.0", "params.shp", "unit-test",
                                   nothing, georef, info, coeffs, refv, trues(n, n), sw,

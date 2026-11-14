@@ -689,15 +689,18 @@ end
 """
     s1_swath_bias(s, c) -> Union{ItsLiveOffsetProduction.SwathOffsetBias,Nothing}
 
-The subswath offset-bias correction's inputs for a full-SLC pair of two different spacecraft, `nothing` for
-one spacecraft, where there is no antenna difference to remove. A burst pair has no correction.
+The subswath offset-bias correction's inputs for a full-SLC pair, `nothing` for a pair of spacecraft with no
+step in [`ItsLiveOffsetProduction.swath_offset_bias`](@ref), including a same-spacecraft pair. A burst pair
+has no correction.
 """
 function s1_swath_bias(s::RadarSetup, c::Correlation)
-    bd = SLCDatasets.subswath_borders(s.early_product, s.late_product)
-    bd.same_platform && return nothing
+    rp, sp = s.early_product, s.late_product
+    step = ItsLiveOffsetProduction.swath_offset_bias(rp.annotations[1].mission, sp.annotations[1].mission)
+    step === nothing && return nothing
+    bd = SLCDatasets.subswath_borders(rp, sp)
     lx, ly = ItsLiveOffsetProduction.image_location(s.geometry)
     return ItsLiveOffsetProduction.SwathOffsetBias(lx, ly, c.grid_spacing_x, bd.ncols, Float64(bd.border12),
-                                                   Float64(bd.border23), bd.same_platform, bd.reference_platform)
+                                                   Float64(bd.border23), step)
 end
 
 _radar_info(s::RadarSetup{P,G,S1Product}, c::Correlation, roi::Float64, lon::Float64, lat::Float64) where {P,G} =

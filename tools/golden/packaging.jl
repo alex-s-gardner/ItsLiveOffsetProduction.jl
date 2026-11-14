@@ -212,10 +212,10 @@ meaning — which is most of this manifest.
 `nothing` for every platform but `S1-SLC`: a burst job opens one or two subswaths
 ([`burst_swaths`](@ref)), which `SLCDatasets.subswath_borders` refuses outright, matching
 `ItsLiveOffsetProduction.SwathOffsetBias`'s own docstring ("or for a pair whose product was not opened
-for all three subswaths"). For an `S1-SLC` pair it is `nothing` whenever the two acquisitions are the
-same spacecraft — `subswath_borders`' own `same_platform` — since the correction removes a difference
-between two *different* antennas' patterns and has no meaning within one. Of this manifest's 5
-full-SLC cases, 4 are same-platform and only the fifth (`S1A` paired with `S1B`) gets a real one.
+for all three subswaths"). For an `S1-SLC` pair it is `nothing` whenever
+`ItsLiveOffsetProduction.swath_offset_bias` gives the two spacecraft no step, as for a same-spacecraft pair.
+Of this manifest's 5 full-SLC cases, 4 are same-platform and only the fifth (`S1A` paired with `S1B`) gets a
+real one.
 
 `p` is `AutoRIFT.params(s.geometry; ...)`, already computed by the caller; `grid_spacing_x` is its
 `grid_spacing.X`, which the correction's coarse-grid smoothing step reads.
@@ -223,12 +223,12 @@ full-SLC cases, 4 are same-platform and only the fifth (`S1A` paired with `S1B`)
 function s1_swath_bias(c::GoldenCase, s::Setup, p)
     c.platform == "S1-SLC" || return nothing
     rp, sp = _s1_products(c, s.run)
+    step = ItsLiveOffsetProduction.swath_offset_bias(rp.annotations[1].mission, sp.annotations[1].mission)
+    step === nothing && return nothing
     bd = SLCDatasets.subswath_borders(rp, sp)
-    bd.same_platform && return nothing
     lx, ly = ItsLiveOffsetProduction.image_location(s.geometry)
     return ItsLiveOffsetProduction.SwathOffsetBias(lx, ly, Float64(p.grid_spacing.X), bd.ncols,
-                                                   Float64(bd.border12), Float64(bd.border23),
-                                                   bd.same_platform, bd.reference_platform)
+                                                   Float64(bd.border12), Float64(bd.border23), step)
 end
 
 # Splits a Sentinel-1 product id (or `burst2safe`'s synthesized SAFE name, same layout —
