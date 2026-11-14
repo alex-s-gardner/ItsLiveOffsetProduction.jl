@@ -118,14 +118,35 @@ end
 # ---------------------------------------------------------------------------
 # Sentinel-1 subswath-offset-bias correction (`netcdf_output.py:1214-1282,1345-1472`), applied to
 # `dx`/`dy` before anything else — including stable-shift correction — sees them.
-#
-# The reference's own empirical table, only ever called with these four values
-# (`testautoRIFT.py:912`); sign-flipped when the reference scene is Sentinel-1B
-# (`netcdf_output.py:1373-1374`). Units match `dx`/`dy` — pixels, not velocity — despite the name
-# `swath_offset_bias_ref` suggesting otherwise; the reference subtracts it from `DX`/`DY` directly.
 # ---------------------------------------------------------------------------
 
-const SWATH_OFFSET_BIAS_REF = (-0.01, 0.019, -0.0068, 0.006)
+"""
+    SWATH_OFFSET_BIAS
+
+The step, in pixels, that a cross-spacecraft Sentinel-1 pair's offsets take at each subswath border, by
+`(reference, secondary)` spacecraft: `(range IW1/IW2, azimuth IW1/IW2, range IW2/IW3, azimuth IW2/IW3)`,
+the far side less the near side. The reverse pair's step is the negation ([`swath_offset_bias`](@ref)); a
+pair in neither order, including a same-spacecraft pair, has no step. A border with no detectable step is
+`0.0`.
+"""
+const SWATH_OFFSET_BIAS = Dict{Tuple{String,String},NTuple{4,Float64}}(
+    ("S1A", "S1B") => (-0.0082, 0.0216, -0.0058, 0.0079),
+    ("S1A", "S1C") => (-0.0039, 0.0049, 0.0, 0.0),
+    ("S1C", "S1D") => (0.0, 0.0049, 0.0, -0.0034),
+)
+
+"""
+    swath_offset_bias(reference_platform, secondary_platform) -> Union{NTuple{4,Float64},Nothing}
+
+The pair's [`SWATH_OFFSET_BIAS`](@ref) step, negated for the reverse order; `nothing` when the table holds
+neither order, including for a same-spacecraft pair.
+"""
+function swath_offset_bias(ref::String, sec::String)
+    b = get(SWATH_OFFSET_BIAS, (ref, sec), nothing)
+    b === nothing || return b
+    r = get(SWATH_OFFSET_BIAS, (sec, ref), nothing)
+    return r === nothing ? nothing : .-r
+end
 
 # Linear interpolation of the interior NaN runs of one row, leaving a run at either end unfilled — no
 # valid neighbor to interpolate from there, matching `pandas.DataFrame.interpolate`'s own default (no
@@ -216,8 +237,8 @@ end
 """
     _swath_offset_bias_correct(dx, dy, coeffs, sw) -> (dx, dy)
 
-`dx`/`dy` with the Sentinel-1 subswath-offset-bias correction applied — a no-op, returning `dx`/`dy`
-unchanged, for a same-platform pair (`sw.same_platform`).
+`dx`/`dy` with the Sentinel-1 subswath-offset-bias correction applied: `sw.step` subtracted past each
+border.
 
 The correction itself is unconditional on the local velocity spread at each border: only whether the
 coarse-grid smoothing runs afterward depends on it (`netcdf_output.py:1412-1447` appends the same
@@ -227,10 +248,7 @@ not assumed from the check existing).
 function _swath_offset_bias_correct(dx::AbstractMatrix{Float32}, dy::AbstractMatrix{Float32},
                                      coeffs::GeogridCoefficients, sw::SwathOffsetBias,
                                      scale_chip_size_y::Float64)
-    sw.same_platform && return (dx, dy)
-
-    sign = endswith(sw.reference_platform, "B") ? -1.0 : 1.0
-    out1, out2, out3, out4 = sign .* SWATH_OFFSET_BIAS_REF
+    out1, out2, out3, out4 = sw.step
 
     loc_x = sw.location_x
     vx = Float32.(coeffs.offset2vx_1 .* (dx .* coeffs.scale_factor_1) .+

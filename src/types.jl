@@ -213,16 +213,15 @@ function roi_valid_percentage end
 """
     SwathOffsetBias
 
-What the Sentinel-1 subswath-offset-bias correction (`cal_swath_offset_bias` in the reference) needs
-beyond `dx`/`dy` themselves: `nothing` for an optical pair, for a same-platform S1 pair (the bias is a
-difference between two spacecrafts' antenna patterns, so it has no meaning within one), or for a pair
-whose product was not opened for all three subswaths.
+What the Sentinel-1 subswath-offset-bias correction needs beyond `dx`/`dy` themselves: `nothing` for an
+optical pair, for an S1 pair whose spacecraft [`swath_offset_bias`](@ref) gives no step (including a
+same-spacecraft pair), or for a pair whose product was not opened for all three subswaths.
 
 `location_x`/`location_y` are the per-output-point image position `dx`/`dy` were measured at — see
 [`image_location`](@ref) — needed because the correction masks by which subswath a point's *range*
-position falls in, not by anything in `GeogridCoefficients`. `border12`/`border23`/`ncols` and
-`same_platform`/`reference_platform` come from `SLCDatasets.subswath_borders`, unchanged; assembling
-the two from a coregistered Sentinel-1 pair is that package's job, not this one's.
+position falls in, not by anything in `GeogridCoefficients`. `border12`/`border23`/`ncols` come from
+`SLCDatasets.subswath_borders`. `step` is the pair's step at the borders, in pixels, as
+[`swath_offset_bias`](@ref) gives it: `(range IW1/IW2, azimuth IW1/IW2, range IW2/IW3, azimuth IW2/IW3)`.
 
 `grid_spacing_x` is the output grid's own spacing, in *original-image* pixels (`Params.grid_spacing.X`
 — `AutoRIFT.params(g).grid_spacing.X`), used only by the correction's own coarse-grid smoothing step.
@@ -234,8 +233,7 @@ struct SwathOffsetBias
     ncols::Int
     border12::Float64
     border23::Float64
-    same_platform::Bool
-    reference_platform::String
+    step::NTuple{4,Float64}
 end
 
 """

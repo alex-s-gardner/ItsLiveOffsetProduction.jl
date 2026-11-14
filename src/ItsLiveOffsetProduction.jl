@@ -82,7 +82,7 @@ using PrecompileTools: @setup_workload, @compile_workload
                                 fill(0.001, ny, nx), fill(0.02, ny, nx),
                                 ones(ny, nx), ones(ny, nx), fill(0.3, ny, nx), fill(0.3, ny, nx))
     loc = repeat(reshape(Float64.(0:(nx - 1)), 1, nx), ny, 1)
-    swath = SwathOffsetBias(loc, copy(loc), 1.0, nx, 20.0, 40.0, false, "S1A")
+    swath = SwathOffsetBias(loc, copy(loc), 1.0, nx, 20.0, 40.0, swath_offset_bias("S1A", "S1B"))
 
     @compile_workload begin
         for (kind, coeffs, bias) in ((:optical, optical, nothing), (:radar, radar, swath))
