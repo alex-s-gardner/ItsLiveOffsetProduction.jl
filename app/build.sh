@@ -40,8 +40,8 @@ find "$out/share/julia/artifacts" -mindepth 2 -maxdepth 2 -type d \( -name inclu
     -exec rm -rf {} +
 find "$out/share/julia/artifacts" -type f -name '*.a' -delete
 "$here/link_libraries.sh" "$out"
-# The version each product records (`app_version` in src/cli.jl): the `git describe` the release workflow names
-# its bundles by, or AUTORIFT_ITSLIVE_VERSION when the build is not in a git checkout.
+# The version each product records (`app_version` in src/cli.jl): AUTORIFT_ITSLIVE_VERSION when set (the release
+# workflow sets it to the version it names the bundles by), otherwise `git describe` of the checkout.
 mkdir -p "$out/share/autorift_itslive"
 version="${AUTORIFT_ITSLIVE_VERSION:-$(git -C "$here" describe --dirty --tags --match '*[0-9]*' 2>/dev/null || true)}"
 [ -n "$version" ] || { echo "cannot name the build's version: not a git checkout and AUTORIFT_ITSLIVE_VERSION unset" >&2; exit 1; }
