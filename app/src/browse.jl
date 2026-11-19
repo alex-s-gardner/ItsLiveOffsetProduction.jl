@@ -289,6 +289,17 @@ function thumbnail_rgba(rgba::Array{UInt8,3})
 end
 
 """
+    browse_paths(product) -> (String, String)
+
+The paths of the browse image `<product>.png` and thumbnail `<product>_thumb.png` of the product netCDF at
+`product`, beside it.
+"""
+function browse_paths(product::String)
+    stem = String(chopsuffix(product, ".nc"))
+    return stem * ".png", stem * "_thumb.png"
+end
+
+"""
     write_browse(product) -> (String, String)
 
 The browse image `<product>.png` and thumbnail `<product>_thumb.png` of the product netCDF at `product`,
@@ -296,8 +307,7 @@ written beside it, drawn from the speed `v` it holds; their paths.
 """
 function write_browse(product::String)
     rgba = browse_rgba(ItsLiveOffsetProduction.read_speed(product))
-    stem = endswith(product, ".nc") ? product[1:(end - 3)] : product
-    browse, thumb = stem * ".png", stem * "_thumb.png"
+    browse, thumb = browse_paths(product)
     write_png(browse, rgba)
     write_png(thumb, thumbnail_rgba(rgba))
     return browse, thumb

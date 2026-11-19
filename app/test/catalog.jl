@@ -8,7 +8,8 @@
 using Dates: Dates, DateTime
 using NanoDates: NanoDate
 using AutoriftItsLiveProduction: write_catalog_records, parse_utc, SLCDatasets, parse_pair_date, parse_created_date, iso_utc,
-                                 _np_round, _py_round, indent_json, item_json, footprint_4326, ItsLiveOffsetProduction
+                                 _np_round, _py_round, indent_json, item_json, footprint_4326, browse_paths,
+                                 ItsLiveOffsetProduction
 
 const CATALOG_DATA = joinpath(@__DIR__, "data", "catalog")
 const CATALOG_PREFIX = "s3://its-live-data/velocity_image_pair/test/v02/N00E000/"
@@ -28,12 +29,23 @@ const CATALOG_PRODUCTS = (
         mktempdir() do dir
             p = joinpath(dir, stem * ".nc")
             cp(joinpath(CATALOG_DATA, stem * ".nc"), p)
+            # Stand-ins for the browse image and thumbnail, whose sizes the item records.
+            browse, thumb = browse_paths(p)
+            write(browse, zeros(UInt8, 300))
+            write(thumb, zeros(UInt8, 20))
             item, pm, sp = write_catalog_records(p, CATALOG_PREFIX * name * ".nc")
             @test basename(item) == name * ".stac.json"
             # The reference's item, laid out as `json.dumps(…, indent = 2)` writes it, except that it carries
             # no "N/A": an optical item neither "sat:orbit_state" nor the sat extension
-            # (nasa-jpl/its_live_production#49), and a Sentinel-1 item without a frame no scene frames.
+            # (nasa-jpl/its_live_production#49), and a Sentinel-1 item without a frame no scene frames; and
+            # that each asset carries its `file:size`, declaring the file extension (#60).
             expected = read(joinpath(CATALOG_DATA, stem * ".stac.json"), String)
+            v = "\"https://stac-extensions.github.io/version/v1.2.0/schema.json\""
+            expected = replace(expected, v => v * ",\n    \"https://stac-extensions.github.io/file/v2.1.0/schema.json\"")
+            for (role, n) in ("data" => filesize(p), "overview" => 300, "thumbnail" => 20)
+                r = "\n      \"roles\": [\n        \"" * role * "\""
+                expected = replace(expected, r => "\n      \"file:size\": " * string(n) * "," * r)
+            end
             if stem in ("landsat8", "sentinel2")
                 expected = replace(expected, ",\n    \"https://stac-extensions.github.io/sat/v1.1.0/schema.json\"" => "",
                                    "\n    \"sat:orbit_state\": \"N/A\"," => "")
@@ -43,6 +55,9 @@ const CATALOG_PRODUCTS = (
             @test got == expected
             @test !occursin("N/A", got)
             @test occursin("sat:orbit_state", got) == occursin("sat/v1.1.0", got)
+            @test count("\"file:size\"", got) == 3
+            rm(thumb)
+            @test_throws "_thumb.png\" is missing or empty" write_catalog_records(p, CATALOG_PREFIX * name * ".nc")
             @test read(pm, String) == read(joinpath(CATALOG_DATA, stem * ".nc.premet"), String)
             @test read(sp, String) == read(joinpath(CATALOG_DATA, stem * ".nc.spatial"), String)
         end
@@ -67,9 +82,10 @@ end
                                s.flight_direction_img1, "13201", "13201", s.date_created, s.date_updated)
     fp = footprint_4326(framed)
     uri = CATALOG_PREFIX * CATALOG_PRODUCTS.sentinel1 * ".nc"
-    got = item_json(framed, fp, CATALOG_PRODUCTS.sentinel1, uri)
+    sizes = (; data = 1, overview = 1, thumbnail = 1)
+    got = item_json(framed, fp, CATALOG_PRODUCTS.sentinel1, uri, sizes)
     @test occursin("\"scene_2_id\":\"" * s.id_img2 * "\",\"scene_1_frame\":\"13201\",\"scene_2_frame\":\"13201\"", got)
-    @test !occursin("scene_1_frame", item_json(s, fp, CATALOG_PRODUCTS.sentinel1, uri))
+    @test !occursin("scene_1_frame", item_json(s, fp, CATALOG_PRODUCTS.sentinel1, uri, sizes))
 end
 
 @testset "a file that is no product is refused, naming what it lacks" begin

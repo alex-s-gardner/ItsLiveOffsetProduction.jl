@@ -124,7 +124,8 @@ end
 
 const STAC_EXTENSIONS = ["https://stac-extensions.github.io/projection/v2.0.0/schema.json",
                          "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json",
-                         "https://stac-extensions.github.io/version/v1.2.0/schema.json"]
+                         "https://stac-extensions.github.io/version/v1.2.0/schema.json",
+                         "https://stac-extensions.github.io/file/v2.1.0/schema.json"]
 
 # The sat extension, declared only by an item carrying `sat:orbit_state`: its schema requires at least one
 # `sat:` field, and `sat:orbit_state` must be "ascending", "descending" or "geostationary".
@@ -162,17 +163,19 @@ _json_obj(pairs) = "{" * join([_json_str(k) * ":" * v for (k, v) in pairs], ",")
 _lonlat(v::Tuple{Float64,Float64}) = _json_list((_json_num(v[1]), _json_num(v[2])))
 
 """
-    item_json(s, fp, id, uri) -> String
+    item_json(s, fp, id, uri, sizes) -> String
 
 The STAC item of product `id`, summarized by `s`, with footprint `fp`, published at `uri`
-(`s3://bucket/prefix/<product>.nc`), whose browse image and thumbnail sit beside it: the document
+(`s3://bucket/prefix/<product>.nc`), whose browse image and thumbnail sit beside it, each asset carrying
+its size in bytes (`file:size`) from `sizes`, a `NamedTuple` of `data`, `overview` and `thumbnail`: the document
 `pystac.Item.to_dict` gives the item `cryoforge`'s `create_stac_item` builds, its keys in that order,
 compact, as `json.dumps(…, separators = (",", ":"))` writes it ([`indent_json`](@ref) lays it out). Where
 `cryoforge` writes `"N/A"` the item leaves the property out: `sat:orbit_state` and the sat extension for a
 product without a flight direction (an optical one), whose `"N/A"` the extension's schema rejects
 (nasa-jpl/its_live_production#49), and `scene_1_frame`/`scene_2_frame` for a product that records no frame.
+`file:size` and the file extension are not in `cryoforge`'s item (#60).
 """
-function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326, id::String, uri::String)
+function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326, id::String, uri::String, sizes)
     mission = String(first(split(s.id_img1, '_')))
     f1, f2 = scene_frames(s, mission)
     mid = iso_utc(parse_pair_date(s.date_center))
@@ -196,19 +199,19 @@ function item_json(s::ItsLiveOffsetProduction.ProductSummary, fp::Footprint4326,
         "datetime" => _json_str(mid)))
     extensions = isempty(orbit) ? STAC_EXTENSIONS : [STAC_EXTENSIONS; STAC_SAT_EXTENSION]
     beside(ext) = replace(uri, ".nc" => ext)
-    image(ext, role) = _json_obj(("href" => _json_str(s3_https(beside(ext))), "type" => _json_str("image/png"),
-                                  "roles" => _json_list((_json_str(role),))))
+    image(ext, role, size) = _json_obj(("href" => _json_str(s3_https(beside(ext))), "type" => _json_str("image/png"),
+                                        "file:size" => string(size), "roles" => _json_list((_json_str(role),))))
     data = _json_obj(("href" => _json_str(s3_https(uri)), "type" => _json_str("application/netcdf"),
                       "alternate" => _json_obj(("s3" => _json_obj(("href" => _json_str(uri),
                                                                    "alternate:name" => _json_str("S3"))),)),
-                      "roles" => _json_list((_json_str("data"),))))
+                      "file:size" => string(sizes.data), "roles" => _json_list((_json_str("data"),))))
     geometry = _json_obj(("type" => _json_str("Polygon"), "coordinates" => _json_list((_json_list(_lonlat.(fp.ring)),))))
     return _json_obj((
         "type" => _json_str("Feature"), "stac_version" => _json_str("1.1.0"),
         "stac_extensions" => _json_list(_json_str.(extensions)), "id" => _json_str(id), "geometry" => geometry,
         "bbox" => _json_list(_json_num.(fp.bbox)), "properties" => _json_obj(props), "links" => "[]",
-        "assets" => _json_obj(("data" => data, "overview" => image(".png", "overview"),
-                               "thumbnail" => image("_thumb.png", "thumbnail"))),
+        "assets" => _json_obj(("data" => data, "overview" => image(".png", "overview", sizes.overview),
+                               "thumbnail" => image("_thumb.png", "thumbnail", sizes.thumbnail))),
         "collection" => _json_str("itslive-granules")))
 end
 
@@ -323,16 +326,24 @@ spatial(fp::Footprint4326) =
 
 The STAC item, premet and spatial file of the product netCDF at `product`, published at `uri`, written
 beside it and named as `uri` names it: `<product>.stac.json`, `<product>.nc.premet` and
-`<product>.nc.spatial`; their paths.
+`<product>.nc.spatial`; their paths. The item records the sizes of the product and of the browse image and
+thumbnail beside it ([`browse_paths`](@ref)), which must already be written.
 """
 function write_catalog_records(product::String, uri::String)
+    browse, thumb = browse_paths(product)
+    files = (; data = product, overview = browse, thumbnail = thumb)
+    # `filesize` is 0 for a missing file.
+    sizes = map(filesize, files)
+    for k in keys(files)
+        sizes[k] > 0 || throw(ArgumentError("\"" * files[k] * "\" is missing or empty"))
+    end
     s = ItsLiveOffsetProduction.read_summary(product)
     fp = footprint_4326(s)
     # Named as the product is where it is published, beside the local file.
     id = String(chopsuffix(basename(uri), ".nc"))
     stem = joinpath(dirname(product), id)
     item, pm, sp = stem * ".stac.json", stem * ".nc.premet", stem * ".nc.spatial"
-    write(item, indent_json(item_json(s, fp, id, uri)))
+    write(item, indent_json(item_json(s, fp, id, uri, sizes)))
     write(pm, premet(s, id))
     write(sp, spatial(fp))
     return item, pm, sp
