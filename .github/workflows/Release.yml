@@ -32,19 +32,10 @@ env:
   IMAGE: ghcr.io/alex-s-gardner/itsliveoffsetproduction.jl
 
 jobs:
-  bundle:
-    name: bundle ${{ matrix.platform }}
-    runs-on: ${{ matrix.runner }}
-    # A trimmed build compiles the whole closure; most of the time is instantiating and precompiling it.
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {platform: linux-x86_64, runner: ubuntu-24.04}
-          - {platform: linux-aarch64, runner: ubuntu-24.04-arm}
-          # The build's largest process peaks near 7.3 GB, about the 7 GB this runner has.
-          - {platform: macos-arm64, runner: macos-15}
+  # One version for the whole run: each job resolving its own `git describe` can see a tag pushed during the
+  # run that an earlier job did not, and then names its bundle differently.
+  version:
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -56,6 +47,23 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=$(git describe --dirty --tags --match '*[0-9]*'); fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  bundle:
+    name: bundle ${{ matrix.platform }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    # A trimmed build compiles the whole closure; most of the time is instantiating and precompiling it.
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: linux-x86_64, runner: ubuntu-24.04}
+          - {platform: linux-aarch64, runner: ubuntu-24.04-arm}
+          # The build's largest process peaks near 7.3 GB, about the 7 GB this runner has.
+          - {platform: macos-arm64, runner: macos-15}
+    steps:
+      - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
         with:
           # The version `app/Manifest.toml` was resolved with.
@@ -72,10 +80,11 @@ jobs:
       - name: Build
         env:
           TRIM_JULIA: julia
+          AUTORIFT_ITSLIVE_VERSION: ${{ needs.version.outputs.version }}
         # pipefail: the build's own status, not tee's.
         shell: bash -eo pipefail {0}
         run: |
-          bundle=$RUNNER_TEMP/autorift_itslive-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          bundle=$RUNNER_TEMP/autorift_itslive-$AUTORIFT_ITSLIVE_VERSION-${{ matrix.platform }}
           app/build.sh "$bundle" 2>&1 | tee "$RUNNER_TEMP/build.log"
           # `juliac` reports verifier errors and still writes an executable for some of them.
           if grep -q 'Verifier error' "$RUNNER_TEMP/build.log"; then echo "::error::the trimmed build has verifier errors"; exit 1; fi
@@ -104,7 +113,7 @@ jobs:
   release:
     name: GitHub Release
     if: github.ref_type == 'tag'
-    needs: bundle
+    needs: [version, bundle]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -115,7 +124,7 @@ jobs:
           merge-multiple: true
       - name: Write manifest.json
         env:
-          VERSION: ${{ needs.bundle.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           cd dist
           platforms='{}'
@@ -141,7 +150,7 @@ jobs:
 
   image:
     name: container image
-    needs: bundle
+    needs: [version, bundle]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -155,7 +164,7 @@ jobs:
           merge-multiple: true
       - name: Stage the bundles
         env:
-          VERSION: ${{ needs.bundle.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           for pair in amd64:linux-x86_64 arm64:linux-aarch64; do
             arch=${pair%%:*}; platform=${pair#*:}
@@ -166,7 +175,7 @@ jobs:
       - name: Tags
         id: tags
         env:
-          VERSION: ${{ needs.bundle.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             echo "tags=$IMAGE:$VERSION,$IMAGE:latest" >> "$GITHUB_OUTPUT"; echo "push=true" >> "$GITHUB_OUTPUT"
@@ -192,4 +201,4 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ needs.bundle.outputs.version }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
