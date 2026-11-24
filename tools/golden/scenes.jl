@@ -163,6 +163,8 @@ const S2_BUCKET_URL = "https://sentinel-s2-l1c.s3.eu-central-1.amazonaws.com/"
 function _s2_path(name::AbstractString)
     # `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile id is field 6, as
     # `T<zone><band><square>`; the bucket files the product under its sensing date, month and day unpadded.
+    # Only products the bucket files under this name, from December 2016 on: the harness does not load the
+    # app, whose `s2_location` also finds the older ones.
     f = split(name, '_')
     tile, t = f[6], f[3]
     startswith(tile, "T") && length(tile) == 6 ||

@@ -185,7 +185,7 @@ end
 
 const S2_BUCKET = "sentinel-s2-l1c"
 # The bucket is public: objects are read over HTTPS with unsigned requests.
-const S2_BUCKET_URL = "https://sentinel-s2-l1c.s3.eu-central-1.amazonaws.com/"
+const S2_BUCKET_URL = "https://" * S2_BUCKET * ".s3.eu-central-1.amazonaws.com/"
 
 # `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile is field 6, `T<zone><band><square>`.
 function _s2_tile(name::String)
@@ -241,9 +241,31 @@ products share with one datastrip holds the same granule, and the first is taken
 does not hold is an error.
 """
 function s2_location(name::String)
-    date, stem = _s2_keys(name)
+    # Looked up once per product: a run asks for each scene's band and again for its flight direction.
+    lock(S2_LOCATIONS_LOCK)
+    try
+        haskey(S2_LOCATIONS, name) && return S2_LOCATIONS[name]
+    finally
+        unlock(S2_LOCATIONS_LOCK)
+    end
+    at = _s2_locate(name)
+    lock(S2_LOCATIONS_LOCK)
+    try
+        S2_LOCATIONS[name] = at
+    finally
+        unlock(S2_LOCATIONS_LOCK)
+    end
+    return at
+end
+
+const S2Location = @NamedTuple{tile::String, datastrip::String}
+const S2_LOCATIONS = Dict{String,S2Location}()
+const S2_LOCATIONS_LOCK = ReentrantLock()
+
+function _s2_locate(name::String)
+    (; date, stem) = _s2_keys(name)
     info = _s2_object("products/" * date * "/" * name * "/productInfo.json")
-    info === nothing || return s2_product_tile(name, info)
+    info === nothing || return s2_product_tile(name, info, stem)
     hits = S2TileInfo[]
     n = 0
     while true
@@ -260,25 +282,26 @@ function s2_location(name::String)
     length(hits) == 1 || throw(ArgumentError(
         "Sentinel-2 product " * name * " matches " * string(length(hits)) * " datastrips under s3://" *
         S2_BUCKET * "/" * stem))
-    return (tile = hits[1].path, datastrip = hits[1].datastrip.path)
+    return S2Location((hits[1].path, hits[1].datastrip.path))
 end
 
 # The bucket's date path of product `name`, `<y>/<m>/<d>`, and the prefix of its tile's directories that day.
 function _s2_keys(name::String)
     tile = _s2_tile(name)
-    t = split(name, '_')[3]
-    date = string(parse(Int, t[1:4])) * "/" * string(parse(Int, t[5:6])) * "/" * string(parse(Int, t[7:8]))
-    return date, "tiles/" * string(parse(Int, tile[2:3])) * "/" * tile[4:4] * "/" * tile[5:6] * "/" * date * "/"
+    d = parse_yyyymmdd(scene_date("S2", name))
+    date = string(Dates.year(d)) * "/" * string(Dates.month(d)) * "/" * string(Dates.day(d))
+    stem = "tiles/" * string(parse(Int, tile[2:3])) * "/" * tile[4:4] * "/" * tile[5:6] * "/" * date * "/"
+    return (; date, stem)
 end
 
-# The tile and datastrip directories of product `name` that its `productInfo.json`, `info`, lists.
-function s2_product_tile(name::String, info::AbstractString)
-    stem = _s2_keys(name)[2]
+# The tile and datastrip directories of product `name` that its `productInfo.json`, `info`, lists; `stem`
+# is the prefix of the product's tile directories that day.
+function s2_product_tile(name::String, info::AbstractString, stem::String = _s2_keys(name).stem)
     tiles = filter(x -> startswith(x.path, stem), JSON3.read(info, S2ProductInfo).tiles)
     length(tiles) == 1 || throw(ArgumentError(
         "expected one " * _s2_tile(name) * " tile in " * name * "'s productInfo.json, found " *
         string(length(tiles))))
-    return (tile = tiles[1].path, datastrip = tiles[1].datastrip.path)
+    return S2Location((tiles[1].path, tiles[1].datastrip.path))
 end
 
 # Whether tile directory `x` (its `tileInfo.json`) holds product `name`, filed under its original name
@@ -291,12 +314,11 @@ function s2_original_product(x::S2TileInfo, name::String)
     p = match(r"^(S2[A-D])_OPER_PRD_MSIL1C_PDMC_(\d{8}T\d{6})_(R\d{3})_V", x.productName)
     d = match(r"_S(\d{8}T\d{6})_N(\d{2})\.(\d{2})$", x.datastrip.id)
     (p === nothing || d === nothing) && return false
-    _capture(p, 1) == f[1] && _capture(p, 3) == f[5] && "N" * _capture(d, 2) * _capture(d, 3) == f[4] ||
-        return false
-    return _capture(p, 2) == f[7] || _capture(d, 1) == f[7]
+    spacecraft, production, orbit = something.(p.captures)
+    sensing, major, minor = something.(d.captures)
+    (spacecraft == f[1] && orbit == f[5] && "N" * major * minor == f[4]) || return false
+    return production == f[7] || sensing == f[7]
 end
-
-_capture(m::RegexMatch, i::Int) = something(m.captures[i])
 
 """
     s2_band_url(name) -> String
