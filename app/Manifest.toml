@@ -97,7 +97,7 @@ version = "1.11.0"
 
 [[deps.AutoRIFT]]
 deps = ["CommonSolve", "Dates", "FFTW", "FFTW_jll", "LinearAlgebra", "Mmap", "PrecompileTools", "Random", "Scratch"]
-git-tree-sha1 = "9424bb2620987e5e924b0370fcdef1a33a3e21e4"
+git-tree-sha1 = "e7a5aa442e9a4da11c43628c3d1fd8fb5c8335f3"
 repo-rev = "main"
 repo-url = "https://github.com/alex-s-gardner/AutoRIFT.jl"
 uuid = "52cb0ed0-aa80-430c-bd04-c52888a79add"

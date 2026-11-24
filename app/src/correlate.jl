@@ -136,6 +136,7 @@ function correlate(s, img::Imagery, pre::AutoRIFT.PreprocessMethod; filter_tile:
     cmax = driver_chip_size_max(g, declined)
     scale = AutoRIFT.chip_size_scale(g)
     p = AutoRIFT.params(g; threaded = AutoRIFT.True(), preprocess = pre, outliers = dispfilt(s.job.platform),
+                        coarse_outliers = SPARSE_DISPFILT,
                         chip_size_max = (X = cmax, Y = even_chip(cmax * scale)))
     factor = cmax ÷ p.chip_size_min.X
     # Lattices counted from the DispGrid origin, so every product's coarser levels sit at the same map
