@@ -35,7 +35,7 @@ An input may also be the scene ID alone (`src/sceneid.jl`): `LC08_L1TP_021248_20
 `S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221`, `AST_L1T_00407222024142636_20251005235025`,
 `S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE`, a NISAR granule ID, or for `S1BURST`
 burst IDs such as `S1_342239_IW3_20211202T161351_VV_3876-BURST`, comma-separated. Landsat IDs become their
-landsatlook STAC item, Sentinel-2 IDs their `B08.jp2` on the Google Cloud mirror and Sentinel-1 SLC IDs their
+landsatlook STAC item, Sentinel-2 IDs their `B08.jp2` in the public `s3://sentinel-s2-l1c` bucket and Sentinel-1 SLC IDs their
 zip at ASF. ASTER IDs are looked up in LP DAAC's catalog (CMR) for their band-3N file. NISAR and burst IDs
 are looked up in ASF's catalog (CMR): a NISAR granule's directory carries its collection's version, and a
 burst's record names the SLC that holds it and its index there, so the burst is read out of that SLC's zip.

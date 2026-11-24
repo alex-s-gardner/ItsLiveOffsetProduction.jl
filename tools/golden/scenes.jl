@@ -4,8 +4,8 @@
 # open and the footprint behind it, which is what the end-to-end ladder needs in order to start
 # where the reference starts: at the granule.
 #
-# Nothing is downloaded. Both routes read the object in place — `/vsicurl` for the anonymous
-# Sentinel-2 mirror, `/vsis3` for requester-pays Landsat — so a case costs the tiles its window
+# Nothing is downloaded. Both routes read the object in place — `/vsicurl` for the public
+# `sentinel-s2-l1c` bucket over HTTPS, `/vsis3` for requester-pays Landsat — so a case costs the tiles its window
 # covers rather than a scene on disk.
 
 using ArchGDAL, Dates, Downloads, GeoFormatTypes, JSON3, ImagePairGeometry
@@ -107,9 +107,9 @@ Landsat resolves through the public landsatlook STAC catalogue, whose item names
 S3 object; reading it needs `AWS_PROFILE` to point at credentials that can pay, the same identity
 `reference.jl` passes to the container.
 
-Sentinel-2 resolves through the granule's `manifest.safe` on the anonymous Google Cloud mirror. The
-granule directory name inside a `.SAFE` is not derivable from the product name — it carries its own
-datatake identifier — so the manifest is read rather than guessed.
+Sentinel-2 resolves through the product's `productInfo.json` in the public `s3://sentinel-s2-l1c` bucket,
+read over HTTPS without signing. The tile directory's last level counts the products of that tile and
+day, so it is read from `productInfo.json` rather than guessed.
 """
 function scene_path(c::GoldenCase, which::Symbol)
     early, late = acquisition_order(c)
@@ -158,22 +158,22 @@ function _landsat_path(name::AbstractString, band::Symbol)
     return "/vsis3/" * href[6:end]
 end
 
-const S2_MIRROR = "https://storage.googleapis.com/gcp-public-data-sentinel-2/tiles"
+const S2_BUCKET_URL = "https://sentinel-s2-l1c.s3.eu-central-1.amazonaws.com/"
 
 function _s2_path(name::AbstractString)
     # `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile id is field 6, as
-    # `T<zone><band><square>`, and the mirror splits it into three directory levels.
-    tile = split(name, '_')[6]
+    # `T<zone><band><square>`; the bucket files the product under its sensing date, month and day unpadded.
+    f = split(name, '_')
+    tile, t = f[6], f[3]
     startswith(tile, "T") && length(tile) == 6 ||
         error("cannot read an MGRS tile out of \"$name\"; expected field 6 like T22WEB")
-    safe = "$S2_MIRROR/$(tile[2:3])/$(tile[4:4])/$(tile[5:6])/$name.SAFE"
-    manifest = String(take!(Downloads.download("$safe/manifest.safe", IOBuffer(); timeout = 90)))
-    # The band the reference correlates is B08 at 10 m. One match is expected; more than one means
-    # the manifest layout changed and guessing which is wrong.
-    hits = unique(m.match for m in eachmatch(r"GRANULE/[^\"<>]*B08\.jp2", manifest))
-    length(hits) == 1 ||
-        error("expected one B08 entry in $name's manifest.safe, found $(length(hits))")
-    return "/vsicurl/$safe/$(only(hits))"
+    date = "$(parse(Int, t[1:4]))/$(parse(Int, t[5:6]))/$(parse(Int, t[7:8]))"
+    info = JSON3.read(String(take!(Downloads.download("$(S2_BUCKET_URL)products/$date/$name/productInfo.json",
+                                                      IOBuffer(); timeout = 90))))
+    stem = "tiles/$(parse(Int, tile[2:3]))/$(tile[4])/$(tile[5:6])/"
+    hits = [x.path for x in info.tiles if startswith(x.path, stem)]
+    length(hits) == 1 || error("expected one $tile tile in $name's productInfo.json, found $(length(hits))")
+    return "/vsicurl/$(S2_BUCKET_URL)$(only(hits))/B08.jp2"
 end
 
 """

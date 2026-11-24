@@ -5,8 +5,7 @@ import JSON3, StructTypes
 
 # The region of each bucket the scenes come from. S3 answers a request to any other region's endpoint
 # with a redirect the transport does not follow.
-const BUCKET_REGION = Dict("usgs-landsat" => "us-west-2", "its-live-data" => "us-west-2",
-                           "sentinel-s2-l1c" => "eu-central-1")
+const BUCKET_REGION = Dict("usgs-landsat" => "us-west-2", "its-live-data" => "us-west-2")
 
 # One S3 transport per bucket, kept for the run so its connections are reused.
 const S3_TRANSPORTS = Dict{String,ChunkManifests.S3Transport}()

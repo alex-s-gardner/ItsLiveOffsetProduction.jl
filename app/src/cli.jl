@@ -18,7 +18,8 @@ usage: autorift_itslive [<sensor>] <reference> <secondary> [<output.nc>] [option
                SAFE burst2safe assembles from them.
                NISAR: the RSLC (NL1) or GSLC (NL2) granule's .h5.
                Or the scene ID alone: a Landsat scene (LC08_L1TP_021248_20210507_20210517_02_T1),
-               a Sentinel-2 product, an ASTER L1T granule (AST_L1T_00407222024142636_20251005235025),
+               a Sentinel-2 product, read from s3://sentinel-s2-l1c without credentials, an ASTER L1T
+               granule (AST_L1T_00407222024142636_20251005235025),
                a Sentinel-1 SLC, a NISAR granule, or for S1BURST the bursts
                (S1_342239_IW3_20211202T161351_VV_3876-BURST), comma-separated; each is resolved to
                the input above, ASTER granules through LP DAAC's catalog (CMR), NISAR granules and

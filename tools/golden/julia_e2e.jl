@@ -5,7 +5,7 @@
 #       LC08_L1TP_009011_20200703 --compare-intermediate
 #
 # **The optical granules are streamed, never staged.** Each scene is read from its own object — Landsat
-# from `s3://usgs-landsat`, Sentinel-2 from the Google mirror over HTTPS — a chunk at a time, inside the
+# from `s3://usgs-landsat`, Sentinel-2 from the public `sentinel-s2-l1c` bucket over HTTPS — a chunk at a time, inside the
 # timed region, as `process.py` reads them through GDAL's `/vsis3/` and `/vsicurl/`. `s3://usgs-landsat`
 # is requester-pays, so `AWS_PROFILE` has to name credentials that can pay. What is kept locally is a
 # run's scratch: the tiles of each image the correlator has already been handed, deleted when the run

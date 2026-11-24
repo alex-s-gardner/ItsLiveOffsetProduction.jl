@@ -59,7 +59,7 @@ A scene may be named by its ID alone, and is then read from where its provider s
 | ID | read from |
 |---|---|
 | Landsat, `LC08_L1TP_021248_20210507_20210517_02_T1` | its landsatlook STAC item |
-| Sentinel-2, `S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221` | its `B08.jp2` on the Google Cloud mirror |
+| Sentinel-2, `S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221` | its `B08.jp2` in the public `s3://sentinel-s2-l1c` bucket |
 | ASTER L1T, `AST_L1T_00407222024142636_20251005235025` | its `_VNIR_B03N.tif` at LP DAAC, as CMR lists it |
 | Sentinel-1 SLC, `S1A_IW_SLC__1SDV_20211118T161558_20211118T161625_040628_04D1E5_D6DE` | its zip at ASF |
 | Sentinel-1 burst (`S1BURST`), `S1_342239_IW3_20211202T161351_VV_3876-BURST` | its SLC's zip at ASF, which ASF's catalog (CMR) names |
@@ -81,7 +81,7 @@ Credentials are read from the environment:
   Set `EARTHDATA_TOKEN`; or `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, which the run writes to a private
   `.netrc` of its own for the run's length; or put the `urs.earthdata.nasa.gov` entry in `~/.netrc` (or the
   file `NETRC` names).
-- Sentinel-2 (the Google Cloud mirror) and Sentinel-1 orbits (the public `s1-orbits` bucket) need none.
+- Sentinel-2 (the public `s3://sentinel-s2-l1c` bucket, read unsigned) and Sentinel-1 orbits (the public `s1-orbits` bucket) need none.
 
 ## Examples
 
@@ -101,14 +101,13 @@ $X L7 $L/LE07_L1GT_060115_20080309_20200913_02_T2 $L/LE07_L1GT_060115_20090107_2
 $X L8 $L/LC08_L1TP_021248_20210507_20210517_02_T1 $L/LC08_L1TP_021248_20220611_20220617_02_T1 l8.nc --scratch /mnt/nvme/scratch
 ```
 
-**Sentinel-2** from the public Google Cloud mirror:
+**Sentinel-2** from the public `s3://sentinel-s2-l1c` bucket, by scene ID or Earth Search STAC item:
 
 ```bash
-G=https://storage.googleapis.com/gcp-public-data-sentinel-2/tiles/07/V/EG
-$X S2 \
-  $G/S2A_MSIL1C_20200626T204021_N0209_R014_T07VEG_20200626T235742.SAFE/GRANULE/L1C_T07VEG_A026180_20200626T204741/IMG_DATA/T07VEG_20200626T204021_B08.jp2 \
-  $G/S2B_MSIL1C_20200701T204019_N0209_R014_T07VEG_20200701T223901.SAFE/GRANULE/L1C_T07VEG_A017343_20200701T204020/IMG_DATA/T07VEG_20200701T204019_B08.jp2 \
-  s2.nc --scratch /mnt/nvme/scratch
+$X S2 S2A_MSIL1C_20200626T204021_N0209_R014_T07VEG_20200626T235742 \
+  S2B_MSIL1C_20200701T204019_N0209_R014_T07VEG_20200701T223901 s2.nc --scratch /mnt/nvme/scratch
+E=https://earth-search.aws.element84.com/v1/collections/sentinel-2-l1c/items
+$X S2 $E/S2A_7VEG_20200626_0_L1C $E/S2B_7VEG_20200701_0_L1C s2.nc --scratch /mnt/nvme/scratch
 ```
 
 **Sentinel-1** from ASF:

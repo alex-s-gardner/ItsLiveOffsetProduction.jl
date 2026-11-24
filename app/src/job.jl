@@ -112,12 +112,12 @@ end
 The scene `input` names. A Landsat input is the band file the reference correlates — `_B8.TIF` for
 Landsat 7, 8 and 9, `_B2.TIF` (green) for 4 and 5 — with its `_MTL.json` and `_ANG.txt` beside it, or a
 landsatlook STAC item, whose assets name all three. A Sentinel-2 input is the `B08.jp2` band inside a
-`.SAFE`, or an Earth Search STAC item, which is resolved through its `s2:product_uri` to the band on the
-public Google Cloud mirror. An ASTER input is the granule's band-3N `_VNIR_B03N.tif`. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
+`.SAFE`, or an Earth Search STAC item, which is resolved through its `s2:product_uri` to the band in the
+public `s3://sentinel-s2-l1c` bucket. An ASTER input is the granule's band-3N `_VNIR_B03N.tif`. A NISAR input is the granule's `.h5`, a Sentinel-1 input the product's `.SAFE`
 directory or its `.zip`. A burst pair's input is the bursts' extractor URLs, or bursts of SLC zips
 (`<zip>#IW<n>/<POL>/<index>`), comma-separated, whose scene is the product `burst2safe` would assemble from
 them; or that product's `.SAFE`. Any but a burst pair's may also be the scene's ID (`sceneid.jl`): a Landsat
-ID names its landsatlook STAC item, a Sentinel-2 ID its band on the mirror, a Sentinel-1 ID its zip at ASF
+ID names its landsatlook STAC item, a Sentinel-2 ID its band in that bucket, a Sentinel-1 ID its zip at ASF
 a NISAR ID the `.h5` CMR lists, and an ASTER ID the band-3N file CMR lists at LP DAAC.
 """
 function scene_source(input::String, platform::String)
@@ -183,7 +183,9 @@ function _s2_from_item(input::String)
     return SceneSource(input, String(name), s2_band_url(String(name)), "", "")
 end
 
-const S2_MIRROR = "https://storage.googleapis.com/gcp-public-data-sentinel-2/tiles"
+const S2_BUCKET = "sentinel-s2-l1c"
+# The bucket is public: objects are read over HTTPS with unsigned requests.
+const S2_BUCKET_URL = "https://sentinel-s2-l1c.s3.eu-central-1.amazonaws.com/"
 
 # `S2B_MSIL1C_20200612T150759_N0209_R025_T22WEB_20200612T184700`: the tile is field 6, `T<zone><band><square>`.
 function _s2_tile(name::String)
@@ -193,28 +195,113 @@ function _s2_tile(name::String)
     return tile
 end
 
-# The product's `.SAFE` on the mirror, which splits the tile into three directory levels.
-function s2_safe_url(name::String)
-    tile = _s2_tile(name)
-    return S2_MIRROR * "/" * tile[2:3] * "/" * tile[4:4] * "/" * tile[5:6] * "/" * name * ".SAFE"
+# The fields of the bucket's `productInfo.json` and `tileInfo.json` the chain reads.
+mutable struct S2Datastrip
+    id::String
+    path::String
+    S2Datastrip() = new("", "")
 end
+mutable struct S2TileInfo
+    path::String
+    productName::String
+    datastrip::S2Datastrip
+    S2TileInfo() = new("", "", S2Datastrip())
+end
+mutable struct S2ProductInfo
+    name::String
+    tiles::Vector{S2TileInfo}
+    S2ProductInfo() = new("", S2TileInfo[])
+end
+StructTypes.StructType(::Type{S2Datastrip}) = StructTypes.Mutable()
+StructTypes.StructType(::Type{S2TileInfo}) = StructTypes.Mutable()
+StructTypes.StructType(::Type{S2ProductInfo}) = StructTypes.Mutable()
+
+# The bucket's object `key`, or `nothing` when there is none.
+function _s2_object(key::String)
+    status, body = ChunkManifests.http_request(S2_BUCKET_URL * key)
+    status == 404 && return nothing
+    status == 200 || throw(ErrorException("HTTP " * string(status) * " fetching s3://" * S2_BUCKET * "/" * key))
+    return String(body)
+end
+
+"""
+    s2_location(name) -> (tile, datastrip)
+
+The keys in `s3://sentinel-s2-l1c` of Sentinel-2 product `name`'s tile directory, which holds its bands
+and tile metadata (`metadata.xml`, the `.SAFE`'s `MTD_TL.xml`), and of its datastrip directory, which
+holds the datastrip metadata (`metadata.xml`, the `.SAFE`'s `MTD_DS.xml`). Both trees are dated by the
+product's sensing day, month and day unpadded: `tiles/<zone>/<band>/<square>/<y>/<m>/<d>/<n>/`, where
+`<n>` counts the products of that tile and day, and `products/<y>/<m>/<d>/<product>/`.
+
+The product's `productInfo.json` names its tile directory. A product from before December 2016 is filed
+under its original name (`S2A_OPER_PRD_MSIL1C_PDMC_…`), not `name`; its tile is then the one whose
+`tileInfo.json` names a product of the same spacecraft, relative orbit and processing baseline whose
+production time, or whose datastrip's sensing start, is `name`'s last field. A tile directory several
+products share with one datastrip holds the same granule, and the first is taken. A product the bucket
+does not hold is an error.
+"""
+function s2_location(name::String)
+    date, stem = _s2_keys(name)
+    info = _s2_object("products/" * date * "/" * name * "/productInfo.json")
+    info === nothing || return s2_product_tile(name, info)
+    hits = S2TileInfo[]
+    n = 0
+    while true
+        doc = _s2_object(stem * string(n) * "/tileInfo.json")
+        doc === nothing && break
+        x = JSON3.read(doc, S2TileInfo)
+        s2_original_product(x, name) && !any(h -> h.datastrip.id == x.datastrip.id, hits) && push!(hits, x)
+        n += 1
+    end
+    isempty(hits) && throw(ArgumentError(
+        "Sentinel-2 product " * name * " is not in s3://" * S2_BUCKET * ": there is no products/" * date * "/" *
+        name * "/productInfo.json, and none of the " * string(n) * " directories under " * stem *
+        " holds it"))
+    length(hits) == 1 || throw(ArgumentError(
+        "Sentinel-2 product " * name * " matches " * string(length(hits)) * " datastrips under s3://" *
+        S2_BUCKET * "/" * stem))
+    return (tile = hits[1].path, datastrip = hits[1].datastrip.path)
+end
+
+# The bucket's date path of product `name`, `<y>/<m>/<d>`, and the prefix of its tile's directories that day.
+function _s2_keys(name::String)
+    tile = _s2_tile(name)
+    t = split(name, '_')[3]
+    date = string(parse(Int, t[1:4])) * "/" * string(parse(Int, t[5:6])) * "/" * string(parse(Int, t[7:8]))
+    return date, "tiles/" * string(parse(Int, tile[2:3])) * "/" * tile[4:4] * "/" * tile[5:6] * "/" * date * "/"
+end
+
+# The tile and datastrip directories of product `name` that its `productInfo.json`, `info`, lists.
+function s2_product_tile(name::String, info::AbstractString)
+    stem = _s2_keys(name)[2]
+    tiles = filter(x -> startswith(x.path, stem), JSON3.read(info, S2ProductInfo).tiles)
+    length(tiles) == 1 || throw(ArgumentError(
+        "expected one " * _s2_tile(name) * " tile in " * name * "'s productInfo.json, found " *
+        string(length(tiles))))
+    return (tile = tiles[1].path, datastrip = tiles[1].datastrip.path)
+end
+
+# Whether tile directory `x` (its `tileInfo.json`) holds product `name`, filed under its original name
+# `S2A_OPER_PRD_MSIL1C_PDMC_<production>_R<orbit>_V<start>_<stop>`, from datastrip
+# `S2A_OPER_MSI_L1C_DS_<centre>__<production>_S<sensing start>_N<baseline>`.
+s2_original_product(x::AbstractString, name::String) = s2_original_product(JSON3.read(x, S2TileInfo), name)
+
+function s2_original_product(x::S2TileInfo, name::String)
+    f = split(name, '_')
+    p = match(r"^(S2[A-D])_OPER_PRD_MSIL1C_PDMC_(\d{8}T\d{6})_(R\d{3})_V", x.productName)
+    d = match(r"_S(\d{8}T\d{6})_N(\d{2})\.(\d{2})$", x.datastrip.id)
+    (p === nothing || d === nothing) && return false
+    _capture(p, 1) == f[1] && _capture(p, 3) == f[5] && "N" * _capture(d, 2) * _capture(d, 3) == f[4] ||
+        return false
+    return _capture(p, 2) == f[7] || _capture(d, 1) == f[7]
+end
+
+_capture(m::RegexMatch, i::Int) = something(m.captures[i])
 
 """
     s2_band_url(name) -> String
 
-The `B08.jp2` of Sentinel-2 product `name` on the public Google Cloud mirror. The granule directory inside
-a `.SAFE` is not derivable from the product name, so the product's `manifest.safe` is read for it.
+The `B08.jp2` of Sentinel-2 product `name` in the public `s3://sentinel-s2-l1c` bucket, as an HTTPS URL
+([`s2_location`](@ref)).
 """
-function s2_band_url(name::String)
-    safe = s2_safe_url(name)
-    tile = _s2_tile(name)
-    manifest = read_text(safe * "/manifest.safe")
-    # The band under IMG_DATA only: from processing baseline 04.00 the manifest also lists QI_DATA masks
-    # whose names end in B08.jp2.
-    hits = unique(String[m.match for m in eachmatch(r"GRANULE/[^\"<>]*/IMG_DATA/[^\"<>]*_B08\.jp2", manifest)])
-    # A product from before December 2016 holds every tile of its datatake: its own is the one named.
-    length(hits) > 1 && filter!(h -> occursin(tile * "_B08", h), hits)
-    length(hits) == 1 || throw(ArgumentError("expected one B08 entry in " * name * "'s manifest.safe, found " *
-                                             string(length(hits))))
-    return safe * "/" * hits[1]
-end
+s2_band_url(name::String) = S2_BUCKET_URL * s2_location(name).tile * "/B08.jp2"

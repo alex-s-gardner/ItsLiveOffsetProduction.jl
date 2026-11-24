@@ -13,6 +13,7 @@ else
         include("browse.jl")
         include("catalog.jl")
         include("sceneid.jl")
+        include("s2bucket.jl")
         include("antimeridian.jl")
         include("tides.jl")
         include("tidecorrection.jl")

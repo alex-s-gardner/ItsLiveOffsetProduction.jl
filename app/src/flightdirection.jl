@@ -63,20 +63,16 @@ end
     flight_direction(scene::SceneSource) -> String
 
 The pass of an optical scene: [`landsat_flight_direction`](@ref) of a Landsat scene's `_ANG.txt`,
-[`s2_flight_direction`](@ref) of a Sentinel-2 product's metadata on the public mirror, found through the
-product's `manifest.safe` as its band is, or [`aster_flight_direction`](@ref) of an ASTER scene.
+[`s2_flight_direction`](@ref) of a Sentinel-2 product's datastrip and tile metadata in the public
+`s3://sentinel-s2-l1c` bucket ([`s2_location`](@ref)), or [`aster_flight_direction`](@ref) of an ASTER scene.
 """
 function flight_direction(scene::SceneSource)
     is_aster_id(scene.name) && return aster_flight_direction(scene)
     startswith(scene.name, "S2") || return landsat_flight_direction(read_text(scene.ang))
-    safe = s2_safe_url(scene.name)
-    manifest = read_text(safe * "/manifest.safe")
-    tile = _s2_tile(scene.name)
-    ds = _manifest_entry(manifest, r"DATASTRIP/[^\"<>]*/MTD_DS\.xml", scene.name)
-    tl = _manifest_entry(manifest, Regex("GRANULE/[^\"<>]*" * tile * "[^\"<>]*/MTD_TL\\.xml"), scene.name)
+    at = s2_location(scene.name)
     # The two heads are independent reads.
-    dsh = Threads.@spawn _object_head(safe * "/" * ds, S2_DATASTRIP_HEAD_BYTES)
-    tlh = _object_head(safe * "/" * tl, S2_TILE_HEAD_BYTES)
+    dsh = Threads.@spawn _object_head(S2_BUCKET_URL * at.datastrip * "/metadata.xml", S2_DATASTRIP_HEAD_BYTES)
+    tlh = _object_head(S2_BUCKET_URL * at.tile * "/metadata.xml", S2_TILE_HEAD_BYTES)
     return s2_flight_direction(_await(dsh)::String, _s2_sensing_time(tlh))
 end
 
@@ -85,11 +81,4 @@ function _object_head(url::String, n::Int)
     t = ChunkManifests.HTTPTransport()
     m = min(UInt64(n), ChunkManifests.objectsize(t, url))
     return String(ChunkManifests.fetchrange(t, url, ChunkManifests.ByteRange(UInt64(0), m)))
-end
-
-function _manifest_entry(manifest::String, pattern::Regex, name::String)
-    hits = unique(String[m.match for m in eachmatch(pattern, manifest)])
-    length(hits) == 1 || throw(ArgumentError("expected one " * pattern.pattern * " in " * name * "'s manifest.safe, found " *
-                                             string(length(hits))))
-    return hits[1]
 end

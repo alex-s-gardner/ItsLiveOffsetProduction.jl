@@ -3,7 +3,7 @@
 #
 #   Landsat              LC08_L1TP_021248_20210507_20210517_02_T1        its landsatlook STAC item
 #   Sentinel-2           S2A_MSIL1C_20200624T181931_N0209_R127_T19XDJ_20200624T201221
-#                                                                        its B08.jp2 on the Google Cloud mirror
+#                                                                        its B08.jp2 in s3://sentinel-s2-l1c
 #   Sentinel-1           S1A_IW_SLC__1SDV_20211118T161558_…_04D1E5_D6DE  its zip at ASF
 #   Sentinel-1 burst     S1_342239_IW3_20211202T161351_VV_3876-BURST     the burst of an SLC zip CMR names
 #   NISAR                NISAR_L1_PR_RSLC_008_155_D_055_…_001            its .h5 at ASF, as CMR lists it
