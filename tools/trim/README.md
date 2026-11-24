@@ -103,9 +103,8 @@ therefore need UTM(zone, hemisphere), the two polar stereographics, and geograph
 - landsatlook (`landsat-c2l1`): `assets[<band>].alternate.s3.href` gives the requester-pays
   `s3://usgs-landsat` object; `MTL.json` and `ANG.txt` are assets of the same item.
 - Earth Search (`sentinel-2-l1c`, ids like `S2A_7VEG_20200626_0_L1C`): `properties["s2:product_uri"]`
-  names the `.SAFE`; asset hrefs point at `s3://sentinel-s2-l1c`, which the ITS_LIVE credentials cannot
-  read (AccessDenied on list and get). An S2 item is therefore resolved through `s2:product_uri` to the
-  anonymous Google mirror, as a path input is.
+  names the `.SAFE`; asset hrefs point at `s3://sentinel-s2-l1c`, which is public and read with unsigned
+  requests. An S2 item is resolved through `s2:product_uri` to that bucket, as a scene ID is.
 
 **Sentinel-1 SLC zips.** Every measurement TIFF in the golden cases' zips is *deflated*, not stored, so
 no byte range of a remote or local zip maps to a byte range of the raster.
