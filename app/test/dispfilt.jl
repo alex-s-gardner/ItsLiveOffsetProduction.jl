@@ -1,6 +1,6 @@
 # The correlator's per-sensor settings: the displacement filter and the image filter.
 
-using AutoriftItsLiveProduction: dispfilt, DISPFILT_STRICT, DISPFILT_OPTICAL, correlator_filter, Job,
+using AutoriftItsLiveProduction: dispfilt, DISPFILT_STRICT, DISPFILT_OPTICAL, SPARSE_DISPFILT, correlator_filter, Job,
                                  SceneSource, WALLIS, HIGHPASS, WALLIS_FILL, NO_FILTER
 using AutoriftItsLiveProduction.AutoRIFT: GardnerFilter
 import AutoriftItsLiveProduction
@@ -19,9 +19,14 @@ job(platform, ref, sec) = Job(platform, platform, SceneSource(ref, ref, "", "", 
     @test (DISPFILT_OPTICAL.mad_scale, DISPFILT_OPTICAL.agree_tolerance) == (4.0, 0.15)
     # A sensor without its own entry gets the optical filter.
     @test dispfilt("RADARSAT-1") == DISPFILT_OPTICAL
+    # The sparse search's filter is as loose as every fine filter in both coefficients.
+    @test (SPARSE_DISPFILT.mad_scale, SPARSE_DISPFILT.agree_tolerance) == (4.0, 0.25)
+    for f in (DISPFILT_STRICT, DISPFILT_OPTICAL)
+        @test SPARSE_DISPFILT.mad_scale >= f.mad_scale && SPARSE_DISPFILT.agree_tolerance >= f.agree_tolerance
+    end
     # The coefficients not set per sensor are AutoRIFT's defaults.
     d = GardnerFilter()
-    for f in (DISPFILT_STRICT, DISPFILT_OPTICAL)
+    for f in (DISPFILT_STRICT, DISPFILT_OPTICAL, SPARSE_DISPFILT)
         @test (f.window, f.iterations, f.min_agree_fraction) == (d.window, d.iterations, d.min_agree_fraction)
     end
 end
